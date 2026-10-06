@@ -51,7 +51,8 @@ Milvus Lite allows only one process to open the database. While the backend is r
 | Variable          | Default                                  |
 |-------------------|------------------------------------------|
 | `GROQ_API_KEY`    | – (required)                             |
-| `GROQ_MODEL`      | `llama-3.3-70b-versatile`                |
+| `GROQ_MODEL`      | `openai/gpt-oss-20b`                     |
+| `ROUTER_MODEL`    | `openai/gpt-oss-20b`                     |
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `MILVUS_DB_PATH`  | `./data/milvus.db`                       |
 | `COLLECTION_NAME` | `docs_rag`                               |
