@@ -21,6 +21,18 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
     top_k: int = 4
 
+    # Comma-separated browser origins allowed to call the API from another domain,
+    # e.g. "https://app.example.com". Empty = same-origin only (Vite proxy in dev,
+    # FastAPI serving frontend/dist in prod), which needs no CORS.
+    cors_origins: str = ""
+
+    # Voice (Deepgram). Empty key = voice endpoints disabled, text chat still works.
+    deepgram_api_key: str = ""
+    deepgram_stt_model: str = "nova-3"
+    deepgram_tts_model: str = "aura-2-thalia-en"
+    # Optional comma-separated domain terms to boost in transcription (Nova-3 keyterm prompting)
+    deepgram_keyterms: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,6 +1,6 @@
 // Same origin by default (Vite proxy in dev, FastAPI in prod).
 // Set VITE_BACKEND_URL only if the API is hosted somewhere else.
-const BASE = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
+const BASE = `${(import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "")}/api`;
 
 async function request(path, options = {}) {
   let res;

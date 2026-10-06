@@ -25,3 +25,8 @@ uvicorn[standard]==0.54.0
 requests
 python-dotenv
 pydantic-settings==2.15.0
+
+# Voice (Deepgram STT/TTS). Pinned: the SDK has breaking changes between majors.
+deepgram-sdk==7.12.0
+httpx==0.28.1
+python-multipart==0.0.32
