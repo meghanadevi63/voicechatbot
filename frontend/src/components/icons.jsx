@@ -54,6 +54,13 @@ export const ChevronIcon = () => (
   </svg>
 );
 
+export const MicIcon = () => (
+  <svg {...base}>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+  </svg>
+);
+
 export const SpeakerIcon = () => (
   <svg {...base} width={16} height={16}>
     <path d="M11 5 6 9H3v6h3l5 4z" />

@@ -319,8 +319,8 @@ New config: `deepgram_flux_model = "flux-general-en"`, `deepgram_eot_threshold =
 
 ## Milestones
 
-1. **1a. Backend voice.** Config, `backend/voice.py`, `/api/stt` and `/api/tts`, and unit tests. Verified with `curl`.
-2. **1b. Push-to-talk UI.** Recorder and player hooks, mic button, "Speak replies" toggle, speaking indicator. Manual checklist passes; latency logged under 3 s.
+1. ✅ **1a. Backend voice.** Config, `backend/voice.py`, `/api/stt` and `/api/tts`, and unit tests. Verified with `curl`.
+2. ✅ **1b. Push-to-talk UI.** Recorder and player hooks, mic button, "Speak replies" toggle, speaking indicator. Measured in Chrome (fake mic): transcript 0.96 s after stopping, spoken answer starts 2.83 s after stopping (target < 3 s).
 3. **2a. Streaming backend.** `astream_answer`, chunker, `/api/ws/voice` with Flux and Aura-2 streaming, without barge-in. *Decision point: continue by hand or switch to Pipecat.*
 4. **2b. Hands-free UI.** `useVoiceSession`, worklets, barge-in with echo guard, status UI. Latency about 1.2 s or less.
 5. **2c. Tuning.** `eot_threshold`, eager end-of-turn, voice choice, silence auto-stop.

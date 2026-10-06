@@ -137,7 +137,7 @@ def test_tts_failure_mid_stream_returns_partial_audio(client):
 
 
 def test_routes_are_under_api_prefix(client):
-    assert client.get("/api/health").json() == {"status": "ok"}
+    assert client.get("/api/health").json()["status"] == "ok"
     assert client.get("/health").status_code == 404
 
 
@@ -147,3 +147,10 @@ def test_warmup_calls_voice_and_is_noop_without_key(client):
     assert voice.warmed == 1
     main.state.pop("voice")
     assert client.post("/api/voice/warmup").status_code == 204
+
+
+def test_health_reports_voice_availability(client):
+    main.state.pop("voice", None)
+    assert client.get("/api/health").json() == {"status": "ok", "voice": False}
+    use(FakeVoice())
+    assert client.get("/api/health").json() == {"status": "ok", "voice": True}

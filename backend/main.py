@@ -118,7 +118,8 @@ api = APIRouter(prefix="/api")
 
 @api.get("/health")
 def health():
-    return {"status": "ok"}
+    # `voice` tells the frontend whether to enable the mic and spoken replies
+    return {"status": "ok", "voice": "voice" in state}
 
 
 @api.post("/chat", response_model=ChatResponse)

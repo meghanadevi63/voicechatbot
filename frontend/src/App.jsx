@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { checkHealth, ingestDocs, sendChat, warmUpVoice } from "./api.js";
+import { checkHealth, ingestDocs, sendChat, transcribe, warmUpVoice } from "./api.js";
 import ChatMessage from "./components/ChatMessage.jsx";
 import Composer from "./components/Composer.jsx";
 import EmptyState from "./components/EmptyState.jsx";
@@ -41,6 +41,9 @@ export default function App() {
   const [messages, setMessages] = useState(loadMessages);
   const [pending, setPending] = useState(false);
   const [backend, setBackend] = useState("checking");
+  const [voiceAvailable, setVoiceAvailable] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState("");
   const [ingest, setIngest] = useState({ status: "idle" });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [speakReplies, setSpeakReplies] = useState(loadSpeakReplies);
@@ -68,7 +71,11 @@ export default function App() {
     let active = true;
     const check = () =>
       checkHealth()
-        .then(() => active && setBackend("ok"))
+        .then((h) => {
+          if (!active) return;
+          setBackend("ok");
+          setVoiceAvailable(Boolean(h.voice));
+        })
         .catch(() => active && setBackend("down"));
     check();
     const timer = setInterval(check, HEALTH_INTERVAL_MS);
@@ -83,10 +90,11 @@ export default function App() {
   }, [messages, pending]);
 
   const ask = useCallback(
-    async (question) => {
+    async (question, { viaVoice = false } = {}) => {
       const history = toHistory(messages);
       stopSpeech(); // a new question interrupts the previous spoken reply
-      setMessages((prev) => [...prev, { id: newId(), role: "user", content: question }]);
+      setVoiceNotice("");
+      setMessages((prev) => [...prev, { id: newId(), role: "user", content: question, viaVoice }]);
       setPending(true);
       if (speakReplies) warmUpVoice();
       try {
@@ -105,6 +113,40 @@ export default function App() {
     },
     [messages, speakReplies, playSpeech, stopSpeech]
   );
+
+  const askByVoice = useCallback(
+    async (blob) => {
+      setTranscribing(true);
+      let transcript;
+      try {
+        ({ transcript } = await transcribe(blob));
+      } catch (e) {
+        setVoiceNotice(`Couldn't transcribe: ${e.message}`);
+        return;
+      } finally {
+        setTranscribing(false);
+      }
+      if (!transcript) {
+        setVoiceNotice("Sorry, I didn't catch that. Try again, a little closer to the mic.");
+        return;
+      }
+      ask(transcript, { viaVoice: true });
+    },
+    [ask]
+  );
+
+  const voice = {
+    available: voiceAvailable && backend === "ok",
+    transcribing,
+    notice: voiceNotice,
+    onStart: () => {
+      stopSpeech(); // don't record the bot's own voice
+      setVoiceNotice("");
+      warmUpVoice(); // the Deepgram connection is ready when the recording is sent
+    },
+    onRecorded: askByVoice,
+    onError: setVoiceNotice,
+  };
 
   const reingest = useCallback(async () => {
     setIngest({ status: "running" });
@@ -150,7 +192,7 @@ export default function App() {
 
         <div className="messages">
           <div className="messages-inner">
-            {messages.length === 0 ? (
+            {messages.length === 0 && !transcribing ? (
               <EmptyState onPick={ask} disabled={pending} />
             ) : (
               messages.map((m) => (
@@ -164,12 +206,13 @@ export default function App() {
                 />
               ))
             )}
+            {transcribing && <ChatMessage message={{ role: "user", typing: true }} />}
             {pending && <ChatMessage message={{ role: "assistant", typing: true }} />}
             <div ref={bottomRef} />
           </div>
         </div>
 
-        <Composer onSend={ask} disabled={pending} />
+        <Composer onSend={ask} disabled={pending} voice={voice} />
       </main>
     </div>
   );

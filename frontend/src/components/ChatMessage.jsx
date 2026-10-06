@@ -1,5 +1,5 @@
 import Sources from "./Sources.jsx";
-import { SpeakerIcon, StopIcon } from "./icons.jsx";
+import { MicIcon, SpeakerIcon, StopIcon } from "./icons.jsx";
 
 // speech: "loading" | "playing" | null for this message
 function SpeechButton({ speech, onSpeak, onStop }) {
@@ -19,12 +19,27 @@ function SpeechButton({ speech, onSpeak, onStop }) {
 }
 
 export default function ChatMessage({ message, speech, speechError, onSpeak, onStopSpeech }) {
-  const { role, content, sources, error, typing } = message;
+  const { role, content, sources, error, typing, viaVoice } = message;
 
   if (role === "user") {
     return (
       <div className="msg msg-user">
-        <div className="bubble">{content}</div>
+        <div className="bubble">
+          {typing ? (
+            <span className="typing typing-light" aria-label="Transcribing">
+              <span />
+              <span />
+              <span />
+            </span>
+          ) : (
+            content
+          )}
+        </div>
+        {viaVoice && (
+          <span className="via-voice">
+            <MicIcon /> Asked by voice
+          </span>
+        )}
       </div>
     );
   }

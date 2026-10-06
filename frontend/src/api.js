@@ -7,7 +7,8 @@ async function send(path, options = {}) {
   let res;
   try {
     res = await fetch(`${BASE}${path}`, {
-      headers: { "Content-Type": "application/json" },
+      // JSON bodies are strings; for FormData the browser sets the multipart header itself
+      headers: typeof options.body === "string" ? { "Content-Type": "application/json" } : {},
       ...options,
     });
   } catch (e) {
@@ -44,3 +45,10 @@ export const warmUpVoice = () => send("/voice/warmup", { method: "POST" }).catch
 // Returns the raw Response so the MP3 body can be played while it streams in.
 export const speak = (text, signal) =>
   send("/tts", { method: "POST", body: JSON.stringify({ text }), signal });
+
+export const transcribe = (blob) => {
+  const form = new FormData();
+  const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
+  form.append("audio", blob, `question.${ext}`);
+  return request("/stt", { method: "POST", body: form });
+};
