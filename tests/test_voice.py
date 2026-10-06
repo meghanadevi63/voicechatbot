@@ -184,3 +184,20 @@ async def test_stream_speech_yields_chunks_in_order():
 @pytest.mark.parametrize("text", ["** **", "...", " - ", "**"])
 def test_clean_symbols_only_is_empty(text):
     assert clean_for_speech(text) == ""
+
+
+@pytest.mark.anyio
+async def test_warm_up_hits_deepgram_and_never_raises():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(403, json={"err_msg": "Insufficient permissions"})
+
+    await make_client(handler).warm_up()  # 403 is fine: the connection is open
+    assert seen == ["/v1/projects"]
+
+    def down(request):
+        raise httpx.ConnectError("no network", request=request)
+
+    await make_client(down).warm_up()  # swallowed

@@ -31,7 +31,17 @@ function IngestResult({ ingest }) {
   return null;
 }
 
-export default function Sidebar({ open, onClose, backend, ingest, onIngest, onClear, canClear }) {
+export default function Sidebar({
+  open,
+  onClose,
+  backend,
+  ingest,
+  onIngest,
+  onClear,
+  canClear,
+  speakReplies,
+  onToggleSpeakReplies,
+}) {
   const status = STATUS[backend];
   const ingesting = ingest.status === "running";
 
@@ -59,6 +69,16 @@ export default function Sidebar({ open, onClose, backend, ingest, onIngest, onCl
             <span className="dot" />
             {status.label}
           </div>
+        </section>
+
+        <section className="sidebar-section">
+          <h2>Voice</h2>
+          <label className="switch">
+            <input type="checkbox" checked={speakReplies} onChange={onToggleSpeakReplies} />
+            <span className="switch-track" aria-hidden="true" />
+            Speak replies
+          </label>
+          <p className="muted">Read each answer aloud. You can also press Listen on any answer.</p>
         </section>
 
         <section className="sidebar-section">

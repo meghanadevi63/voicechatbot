@@ -101,6 +101,19 @@ class DeepgramClient:
     async def aclose(self):
         await self.http.aclose()
 
+    async def warm_up(self) -> None:
+        """Re-open the connection to Deepgram ahead of a TTS/STT call.
+
+        Deepgram drops idle connections after a few seconds, and reconnecting adds
+        ~0.5 s to the next call (measured: TTS first audio 0.95 s cold vs 0.39 s
+        warm). Call this while the RAG is still answering. Listing projects is free;
+        any response, even a 403 for a restricted key, leaves the connection open.
+        """
+        try:
+            await self.dg.manage.v1.projects.list(request_options={"max_retries": 0})
+        except Exception as e:  # best effort: never fail a request over a warm-up
+            logger.debug("Deepgram warm-up failed: %s", e)
+
     async def transcribe(self, audio: bytes) -> str:
         """Transcribe a recorded clip. Returns "" when nothing intelligible was said.
 

@@ -133,6 +133,14 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@api.post("/voice/warmup", status_code=204)
+async def voice_warmup():
+    """Called by the frontend when it sends a question, so the reply's TTS call
+    doesn't pay for a fresh Deepgram connection. No-op when voice is disabled."""
+    if "voice" in state:
+        await state["voice"].warm_up()
+
+
 @api.post("/stt", response_model=STTResponse)
 async def stt(audio: UploadFile = File(...)):
     voice = get_voice()

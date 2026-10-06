@@ -14,6 +14,10 @@ class FakeVoice:
         self.error = error
         self.fail_after_first = fail_after_first
         self.received = None
+        self.warmed = 0
+
+    async def warm_up(self):
+        self.warmed += 1
 
     async def transcribe(self, audio: bytes) -> str:
         self.received = audio
@@ -135,3 +139,11 @@ def test_tts_failure_mid_stream_returns_partial_audio(client):
 def test_routes_are_under_api_prefix(client):
     assert client.get("/api/health").json() == {"status": "ok"}
     assert client.get("/health").status_code == 404
+
+
+def test_warmup_calls_voice_and_is_noop_without_key(client):
+    voice = use(FakeVoice())
+    assert client.post("/api/voice/warmup").status_code == 204
+    assert voice.warmed == 1
+    main.state.pop("voice")
+    assert client.post("/api/voice/warmup").status_code == 204

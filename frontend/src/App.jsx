@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { checkHealth, ingestDocs, sendChat } from "./api.js";
+import { checkHealth, ingestDocs, sendChat, warmUpVoice } from "./api.js";
 import ChatMessage from "./components/ChatMessage.jsx";
 import Composer from "./components/Composer.jsx";
 import EmptyState from "./components/EmptyState.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import { MenuIcon } from "./components/icons.jsx";
+import usePlayer from "./voice/usePlayer.js";
 
 const STORAGE_KEY = "docs-assistant-messages";
+const SPEAK_KEY = "docs-assistant-speak-replies";
 const HEALTH_INTERVAL_MS = 15000;
 
 let nextId = 0;
@@ -17,6 +19,14 @@ function loadMessages() {
     return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
   } catch {
     return [];
+  }
+}
+
+function loadSpeakReplies() {
+  try {
+    return localStorage.getItem(SPEAK_KEY) !== "false"; // on by default
+  } catch {
+    return true;
   }
 }
 
@@ -33,7 +43,18 @@ export default function App() {
   const [backend, setBackend] = useState("checking");
   const [ingest, setIngest] = useState({ status: "idle" });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [speakReplies, setSpeakReplies] = useState(loadSpeakReplies);
+  const player = usePlayer();
+  const { play: playSpeech, stop: stopSpeech } = player;
   const bottomRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SPEAK_KEY, String(speakReplies));
+    } catch {
+      // Storage unavailable: the setting just isn't remembered
+    }
+  }, [speakReplies]);
 
   useEffect(() => {
     try {
@@ -64,11 +85,15 @@ export default function App() {
   const ask = useCallback(
     async (question) => {
       const history = toHistory(messages);
+      stopSpeech(); // a new question interrupts the previous spoken reply
       setMessages((prev) => [...prev, { id: newId(), role: "user", content: question }]);
       setPending(true);
+      if (speakReplies) warmUpVoice();
       try {
         const { answer, sources } = await sendChat(question, history);
-        setMessages((prev) => [...prev, { id: newId(), role: "assistant", content: answer, sources }]);
+        const id = newId();
+        setMessages((prev) => [...prev, { id, role: "assistant", content: answer, sources }]);
+        if (speakReplies) playSpeech(id, answer);
       } catch (e) {
         setMessages((prev) => [
           ...prev,
@@ -78,7 +103,7 @@ export default function App() {
         setPending(false);
       }
     },
-    [messages]
+    [messages, speakReplies, playSpeech, stopSpeech]
   );
 
   const reingest = useCallback(async () => {
@@ -91,9 +116,15 @@ export default function App() {
   }, []);
 
   const clearChat = useCallback(() => {
+    stopSpeech();
     setMessages([]);
     setSidebarOpen(false);
-  }, []);
+  }, [stopSpeech]);
+
+  const toggleSpeakReplies = useCallback(() => {
+    if (speakReplies) stopSpeech();
+    setSpeakReplies(!speakReplies);
+  }, [speakReplies, stopSpeech]);
 
   return (
     <div className="app">
@@ -105,6 +136,8 @@ export default function App() {
         onIngest={reingest}
         onClear={clearChat}
         canClear={messages.length > 0 && !pending}
+        speakReplies={speakReplies}
+        onToggleSpeakReplies={toggleSpeakReplies}
       />
 
       <main className="main">
@@ -120,7 +153,16 @@ export default function App() {
             {messages.length === 0 ? (
               <EmptyState onPick={ask} disabled={pending} />
             ) : (
-              messages.map((m) => <ChatMessage key={m.id} message={m} />)
+              messages.map((m) => (
+                <ChatMessage
+                  key={m.id}
+                  message={m}
+                  speech={player.speech?.id === m.id ? player.speech.status : null}
+                  speechError={player.error?.id === m.id ? player.error.message : null}
+                  onSpeak={() => playSpeech(m.id, m.content)}
+                  onStopSpeech={stopSpeech}
+                />
+              ))
             )}
             {pending && <ChatMessage message={{ role: "assistant", typing: true }} />}
             <div ref={bottomRef} />

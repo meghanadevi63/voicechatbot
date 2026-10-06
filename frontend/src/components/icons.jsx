@@ -54,6 +54,19 @@ export const ChevronIcon = () => (
   </svg>
 );
 
+export const SpeakerIcon = () => (
+  <svg {...base} width={16} height={16}>
+    <path d="M11 5 6 9H3v6h3l5 4z" />
+    <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+  </svg>
+);
+
+export const StopIcon = () => (
+  <svg {...base} width={16} height={16}>
+    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 export const LogoMark = () => (
   <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
     <rect width="32" height="32" rx="8" fill="var(--accent)" />

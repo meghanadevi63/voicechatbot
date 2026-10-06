@@ -1,6 +1,24 @@
 import Sources from "./Sources.jsx";
+import { SpeakerIcon, StopIcon } from "./icons.jsx";
 
-export default function ChatMessage({ message }) {
+// speech: "loading" | "playing" | null for this message
+function SpeechButton({ speech, onSpeak, onStop }) {
+  if (speech) {
+    return (
+      <button className="speech-btn active" onClick={onStop} aria-label="Stop speaking">
+        {speech === "loading" ? <span className="spinner" /> : <StopIcon />}
+        {speech === "loading" ? "Loading audio…" : "Stop"}
+      </button>
+    );
+  }
+  return (
+    <button className="speech-btn" onClick={onSpeak} aria-label="Read answer aloud">
+      <SpeakerIcon /> Listen
+    </button>
+  );
+}
+
+export default function ChatMessage({ message, speech, speechError, onSpeak, onStopSpeech }) {
   const { role, content, sources, error, typing } = message;
 
   if (role === "user") {
@@ -22,6 +40,12 @@ export default function ChatMessage({ message }) {
       ) : (
         <>
           <div className="answer">{error ? `Something went wrong: ${content}` : content}</div>
+          {!error && onSpeak && (
+            <div className="msg-actions">
+              <SpeechButton speech={speech} onSpeak={onSpeak} onStop={onStopSpeech} />
+              {speechError && <span className="speech-error">{speechError}</span>}
+            </div>
+          )}
           {sources?.length > 0 && <Sources sources={sources} />}
         </>
       )}

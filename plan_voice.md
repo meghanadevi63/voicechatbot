@@ -108,6 +108,7 @@ deepgram_keyterms: str = ""          # optional, comma-separated domain terms fo
 |--------|------|---------|----------|
 | POST | `/api/stt` | multipart `audio` file (max 10 MB) | `{"transcript": "..."}` |
 | POST | `/api/tts` | `{"text": "..."}` (max 5000 chars) | **streamed** `audio/mpeg` (chunked) |
+| POST | `/api/voice/warmup` | – | 204. Re-opens the Deepgram connection (see below) |
 
 - Return 503 with a clear message if `DEEPGRAM_API_KEY` is not set. Voice is optional, and the text chat keeps working without it.
 - Map Deepgram errors as follows:
@@ -115,6 +116,7 @@ deepgram_keyterms: str = ""          # optional, comma-separated domain terms fo
   - 429 → 503 "Voice service busy"
   - timeout → 504
 - Log how long each call takes (`stt_ms`, `tts_ms`).
+- **Connection warm-up.** Deepgram drops idle connections after a few seconds, and reconnecting adds ~0.55 s (measured: TTS first byte 0.95 s cold vs 0.39 s warm; a longer httpx keepalive doesn't help). The frontend calls `/api/voice/warmup` when it sends a question, so the connection is warm again by the time the answer is ready. Step 4 also calls it when recording starts. *(Done: step 3.)*
 - `/api/tts` reads the first chunk *before* returning the `StreamingResponse`, so a Deepgram error still becomes a proper HTTP error status instead of a broken stream.
 - New dependencies in `requirements.txt`: `deepgram-sdk==7.12.0`, `httpx` (pinned explicitly) and `python-multipart`, which FastAPI needs for uploads.
 
@@ -145,7 +147,7 @@ deepgram_keyterms: str = ""          # optional, comma-separated domain terms fo
 | Router LLM (Groq) | 0.2–0.4 s |
 | Retrieval (Milvus Lite + MiniLM, CPU) | ~0.1 s |
 | Answer LLM (Groq) | 0.3–0.8 s |
-| Aura-2 first audio (streamed; full reply takes ~3–4 s) | ~0.4 s |
+| Aura-2 first audio (streamed + warm-up; full reply takes ~3–4 s) | ~0.4 s (measured in Chrome: playback starts 0.36–0.52 s after the answer text) |
 | **Total** | **~1.3–2.3 s** (target < 3 s) |
 
 ---
