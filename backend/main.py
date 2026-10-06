@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.ingest import ingest
@@ -68,3 +70,10 @@ async def ingest_docs():
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Serve the built React app (frontend/dist) when present. Mounted last so the
+# API routes above take precedence over static files.
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")

@@ -22,7 +22,6 @@ pypdf==6.19.0
 # Backend / frontend
 fastapi==0.142.2
 uvicorn[standard]==0.54.0
-streamlit==1.65.0
 requests
 python-dotenv
 pydantic-settings==2.15.0
