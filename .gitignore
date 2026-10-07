@@ -5,3 +5,5 @@ __pycache__/
 node_modules/
 frontend/dist/
 legacy/
+key.pem
+cert.pem
