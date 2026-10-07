@@ -41,6 +41,10 @@ All-in-one APIs (Deepgram Voice Agent, OpenAI Realtime, Gemini Live) would make 
 - Streaming TTS allows **at most 20 `Flush` messages per 60 s** and 2400 characters per minute per connection. The Phase 2 chunker must group sentences instead of flushing after each one.
 - Flux wants raw audio in **80 ms chunks** (`linear16` at 16 kHz is 2560 bytes per chunk).
 - Use the official **`deepgram-sdk`, pinned to `7.12.0`** (latest stable as of 2026-10-02). It has had four major versions in a year (v4 May 2025 → v7 Apr 2026), so all SDK calls stay inside `backend/voice.py` and upgrades touch only that file.
+- **Phase 2 probe (2026-10-07, SDK 7.12.0, our key).** Flux and Aura-2 WebSocket both work.
+  - Flux: `EndOfTurn` arrived **~190 ms** after the user stopped speaking, and a short pause mid-question ("…stacking? And how…") did not end the turn. Connecting takes ~1 s, so open both sockets when hands-free starts, never per turn.
+  - Aura-2 WebSocket: first audio **~300 ms** after `Flush`; normally 8 s of speech arrives within ~2.5 s, with gaps ≤ 70 ms. The player needs a small jitter buffer (~150 ms) before it starts.
+  - **Outliers:** in 2 of 5 runs the audio stalled for seconds (one run took 34 s for 8 s of speech). Phase 2 needs a stall timeout: if no audio arrives for ~3 s, end the answer with a message and keep the text visible.
 - **Aura-2 is slower than expected for a whole reply.** Measured on 2026-10-06: first audio after ~0.4 s (warm), but ~3–4 s for a two-sentence reply. Audio must be **streamed** to the browser and played as it arrives, never fully buffered first.
 
 ---
