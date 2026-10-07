@@ -1,4 +1,4 @@
-"""Async Deepgram client: speech-to-text (Nova-3) and text-to-speech (Aura-2).
+"""Async Deepgram client: speech-to-text (Nova-3, Flux) and text-to-speech (Aura-2).
 
 Wraps the official SDK (pinned in requirements.txt; its API changes between
 major versions, so all SDK calls stay in this module).
@@ -8,10 +8,14 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import httpx
 from deepgram import AsyncDeepgramClient
 from deepgram.core.api_error import ApiError
+from deepgram.speak.v1.types import SpeakV1Text
+from websockets.exceptions import ConnectionClosed
 
 from backend.config import Settings
 
@@ -22,6 +26,9 @@ TIMEOUT_S = 15.0
 MAX_RETRIES = 1
 # Aura-2 rejects requests over 2000 characters; stay safely under it.
 TTS_MAX_CHARS = 1900
+# Live audio formats: Flux takes PCM16 mono 16 kHz in, Aura-2 sends PCM16 mono 24 kHz out.
+LISTEN_SAMPLE_RATE = 16000
+SPEAK_SAMPLE_RATE = 24000
 
 
 class VoiceError(Exception):
@@ -81,13 +88,104 @@ def _voice_error(e: Exception) -> VoiceError:
         return VoiceError(f"Deepgram error {e.status_code}: {str(e.body)[:200]}", status=e.status_code)
     if isinstance(e, httpx.TimeoutException):
         return VoiceError("Deepgram request timed out", timeout=True)
+    if isinstance(e, ConnectionClosed):
+        return VoiceError(f"Deepgram closed the connection: {e}")
     return VoiceError(f"Can't reach Deepgram: {e}")
+
+
+# Errors a live Deepgram socket can raise while connecting or streaming
+LIVE_ERRORS = (ApiError, ConnectionClosed, OSError)
+
+
+@dataclass
+class TurnEvent:
+    """A Flux turn update.
+
+    `event` is StartOfTurn, Update, EagerEndOfTurn, TurnResumed or EndOfTurn;
+    `transcript` is everything said so far in the turn.
+    """
+
+    event: str
+    transcript: str
+
+
+class LiveListener:
+    """Flux socket: send PCM16 mono 16 kHz audio, iterate turn events."""
+
+    def __init__(self, ws):
+        self._ws = ws
+
+    async def send(self, audio: bytes) -> None:
+        try:
+            await self._ws.send_media(audio)
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e
+
+    async def events(self) -> AsyncIterator[TurnEvent]:
+        try:
+            async for msg in self._ws:
+                kind = getattr(msg, "type", None)
+                if kind == "TurnInfo":
+                    yield TurnEvent(msg.event, (msg.transcript or "").strip())
+                elif kind == "Error":
+                    raise VoiceError(f"Flux error {msg.code}: {msg.description}")
+                elif kind == "Warning":
+                    logger.warning("Flux warning %s: %s", msg.code, msg.description)
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e
+
+
+class LiveSpeaker:
+    """Aura-2 socket: queue text, flush it, iterate PCM16 mono 24 kHz audio.
+
+    `events()` yields audio chunks (bytes) and the markers "Flushed" (all
+    audio for the flushed text has been sent) and "Cleared" (after clear()).
+    """
+
+    def __init__(self, ws):
+        self._ws = ws
+
+    async def speak(self, text: str) -> None:
+        try:
+            for piece in split_for_tts(clean_for_speech(text)):
+                await self._ws.send_text(SpeakV1Text(type="Speak", text=piece))
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e
+
+    async def flush(self) -> None:
+        try:
+            await self._ws.send_flush()
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e
+
+    async def clear(self) -> None:
+        """Drop any audio not yet sent (used when speech stalls, later for barge-in)."""
+        try:
+            await self._ws.send_clear()
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e
+
+    async def events(self) -> AsyncIterator[bytes | str]:
+        try:
+            async for msg in self._ws:
+                if isinstance(msg, bytes):
+                    yield msg
+                    continue
+                kind = getattr(msg, "type", None)
+                if kind in ("Flushed", "Cleared"):
+                    yield kind
+                elif kind == "Warning":
+                    logger.warning("Aura-2 warning %s: %s", msg.code, msg.description)
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e
 
 
 class DeepgramClient:
     def __init__(self, settings: Settings, http: httpx.AsyncClient | None = None):
         self.stt_model = settings.deepgram_stt_model
         self.tts_model = settings.deepgram_tts_model
+        self.flux_model = settings.deepgram_flux_model
+        self.eot_threshold = settings.deepgram_eot_threshold
         self.keyterms = [t.strip() for t in settings.deepgram_keyterms.split(",") if t.strip()]
         # `http` lets tests inject a mock transport
         self.http = http or httpx.AsyncClient(timeout=TIMEOUT_S)
@@ -168,3 +266,30 @@ class DeepgramClient:
     async def synthesize(self, text: str) -> bytes:
         """Synthesize the whole reply as one MP3."""
         return b"".join([chunk async for chunk in self.stream_speech(text)])
+
+    # Live sockets for hands-free mode. Connecting takes ~1 s, so a session opens
+    # each socket once and keeps it for all its turns.
+
+    @asynccontextmanager
+    async def live_listener(self) -> AsyncIterator[LiveListener]:
+        try:
+            async with self.dg.listen.v2.connect(
+                model=self.flux_model,
+                encoding="linear16",
+                sample_rate=LISTEN_SAMPLE_RATE,
+                eot_threshold=self.eot_threshold,
+                keyterm=self.keyterms or None,
+            ) as ws:
+                yield LiveListener(ws)
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e
+
+    @asynccontextmanager
+    async def live_speaker(self) -> AsyncIterator[LiveSpeaker]:
+        try:
+            async with self.dg.speak.v1.connect(
+                model=self.tts_model, encoding="linear16", sample_rate=SPEAK_SAMPLE_RATE
+            ) as ws:
+                yield LiveSpeaker(ws)
+        except LIVE_ERRORS as e:
+            raise _voice_error(e) from e

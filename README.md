@@ -71,8 +71,15 @@ Browsers only allow the microphone on `https://` or `localhost`. Without a Deepg
 | POST   | `/api/ingest` | –                                     | `{"files", "pages", "chunks"}`  |
 | POST   | `/api/stt`    | multipart `audio` file (max 10 MB)    | `{"transcript": "..."}` (`""` if nothing was heard) |
 | POST   | `/api/tts`    | `{"text": "..."}` (max 5000 chars)     | streamed `audio/mpeg`           |
+| WS     | `/api/ws/voice` | hands-free voice (in progress; no UI yet) | see `backend/voice_session.py` |
 
 `/api/stt` and `/api/tts` return 503 when `DEEPGRAM_API_KEY` is not set; text chat works without it.
+
+**Hands-free WebSocket.** The browser sends `{"type": "start", "history": [...]}`, then mic audio as binary PCM16 mono 16 kHz frames. Flux detects when the user has finished speaking, the RAG answers, and the server sends back JSON events (`user_turn`, `answer_sources`, `answer_delta`, `answer_done`, `status`, ...) plus the spoken reply as binary PCM16 mono 24 kHz. Pages from other origins are rejected (same-origin and `CORS_ORIGINS` only). To try it without a browser:
+
+```bash
+python scripts/voice_client.py question.wav   # PCM16 mono 16 kHz WAV; saves reply.wav
+```
 
 ## Configuration (`.env`)
 
@@ -90,6 +97,8 @@ Browsers only allow the microphone on `https://` or `localhost`. Without a Deepg
 | `DEEPGRAM_API_KEY` | – (optional; enables voice)            |
 | `DEEPGRAM_STT_MODEL` / `DEEPGRAM_TTS_MODEL` | `nova-3` / `aura-2-thalia-en` |
 | `DEEPGRAM_KEYTERMS` | – (comma-separated terms to boost in transcription) |
+| `DEEPGRAM_FLUX_MODEL` / `DEEPGRAM_EOT_THRESHOLD` | `flux-general-en` / `0.7` (hands-free; higher waits longer before answering) |
+| `VOICE_MAX_SESSIONS` | `5` (simultaneous hands-free sessions) |
 
 Don't name a variable `MILVUS_URI`. pymilvus reads it from `.env` itself and expects a server URL.
 

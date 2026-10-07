@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # Optional comma-separated domain terms to boost in transcription (Nova-3 keyterm prompting)
     deepgram_keyterms: str = ""
 
+    # Hands-free voice (WebSocket /api/ws/voice)
+    deepgram_flux_model: str = "flux-general-en"
+    # Flux end-of-turn confidence (0.5-0.9): higher waits longer before answering
+    deepgram_eot_threshold: float = 0.7
+    # Max simultaneous hands-free sessions: each one streams paid STT for as long as it's open
+    voice_max_sessions: int = 5
+
 
 @lru_cache
 def get_settings() -> Settings:

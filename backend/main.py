@@ -1,9 +1,11 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -14,6 +16,7 @@ from backend.config import get_settings
 from backend.ingest import ingest
 from backend.rag import RAGChain
 from backend.voice import DeepgramClient, VoiceError, clean_for_speech
+from backend.voice_session import ProtocolError, VoiceSession
 
 # Show our INFO logs (routing decisions, stt_ms / tts_ms timings) next to uvicorn's
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s %(message)s")
@@ -42,6 +45,20 @@ def add_cors(app: FastAPI, origins: list[str]) -> None:
         max_age=600,  # browsers cache the preflight, so most calls skip the extra OPTIONS
     )
     logger.info("CORS enabled for %s", ", ".join(origins))
+
+
+def origin_allowed(origin: str | None, host: str | None, origins: list[str]) -> bool:
+    """WebSocket origin check. Browsers don't apply CORS to WebSockets, so any
+    website could otherwise open /api/ws/voice from a visitor's browser.
+
+    Allows same-origin pages and CORS_ORIGINS. Clients without an Origin header
+    are not browsers (e.g. scripts/voice_client.py); an Origin check can't stop
+    those anyway.
+    """
+    if origin is None or "*" in origins:
+        return True
+    origin = origin.rstrip("/")
+    return origin in origins or urlsplit(origin).netloc == host
 
 
 class ChatTurn(BaseModel):
@@ -97,20 +114,28 @@ def get_voice() -> DeepgramClient:
     return voice
 
 
-def voice_http_error(e: VoiceError) -> HTTPException:
-    """Turn a Deepgram failure into a status the frontend can explain to the user."""
+def describe_voice_error(e: VoiceError) -> tuple[int, str]:
+    """Turn a Deepgram failure into an HTTP status and a message the frontend can show."""
     logger.warning("Voice error: %s", e)
     if e.status in (401, 403):
-        return HTTPException(status_code=502, detail="Voice service misconfigured (check DEEPGRAM_API_KEY)")
+        return 502, "Voice service misconfigured (check DEEPGRAM_API_KEY)"
     if e.status == 429:
-        return HTTPException(status_code=503, detail="Voice service is busy, try again in a moment")
+        return 503, "Voice service is busy, try again in a moment"
     if e.timeout:
-        return HTTPException(status_code=504, detail="Voice service timed out")
-    return HTTPException(status_code=502, detail="Voice service error")
+        return 504, "Voice service timed out"
+    return 502, "Voice service error"
+
+
+def voice_http_error(e: VoiceError) -> HTTPException:
+    status, detail = describe_voice_error(e)
+    return HTTPException(status_code=status, detail=detail)
 
 
 app = FastAPI(title="RAG Chatbot API", lifespan=lifespan)
-add_cors(app, parse_origins(get_settings().cors_origins))
+CORS_ORIGINS = parse_origins(get_settings().cors_origins)
+add_cors(app, CORS_ORIGINS)
+# Hands-free sessions stream paid STT for as long as they're open
+voice_sessions = asyncio.Semaphore(get_settings().voice_max_sessions)
 # All API routes live under /api, so they never clash with frontend files and the
 # Vite dev proxy needs a single entry.
 api = APIRouter(prefix="/api")
@@ -184,6 +209,47 @@ async def tts(req: TTSRequest):
             logger.exception("TTS stream failed mid-way")
 
     return StreamingResponse(body(), media_type="audio/mpeg")
+
+
+async def answer_async(question: str, history: list[dict]) -> dict:
+    return await run_in_threadpool(state["rag"].answer, question, history)
+
+
+@api.websocket("/ws/voice")
+async def ws_voice(ws: WebSocket):
+    """Hands-free voice: protocol in backend/voice_session.py."""
+    if not origin_allowed(ws.headers.get("origin"), ws.headers.get("host"), CORS_ORIGINS):
+        logger.warning("Rejected voice WebSocket from origin %s", ws.headers.get("origin"))
+        await ws.close(code=1008)  # before accept(): the browser sees a failed handshake (403)
+        return
+    await ws.accept()
+
+    async def fail(message: str, code: int) -> None:
+        try:
+            await ws.send_json({"type": "error", "message": message})
+            await ws.close(code=code)
+        except (WebSocketDisconnect, RuntimeError):  # the browser already left
+            pass
+
+    voice = state.get("voice")
+    if voice is None:
+        return await fail("Voice is not configured (DEEPGRAM_API_KEY missing)", 1011)
+    if voice_sessions.locked():
+        return await fail("Too many voice sessions are open. Try again later.", 1013)
+
+    async with voice_sessions:
+        try:
+            await VoiceSession(ws, voice, answer_async).run()
+        except WebSocketDisconnect:
+            return
+        except ProtocolError as e:
+            return await fail(str(e), 1008)
+        except VoiceError as e:
+            return await fail(describe_voice_error(e)[1], 1011)
+        except Exception:
+            logger.exception("Voice session failed")
+            return await fail("Voice session error", 1011)
+    await ws.close()
 
 
 @api.post("/ingest")
