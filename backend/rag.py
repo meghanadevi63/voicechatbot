@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Literal
 
 from langchain_core.documents import Document
@@ -120,20 +121,36 @@ class RAGChain:
             return Route(intent="document_query", search_query=question)
 
     def answer(self, question: str, history: list[dict]) -> dict:
+        start = time.perf_counter()
         messages = to_messages(history)
         route = self.route(question, messages)
-        logger.info("Routed %r -> %s", question, route.intent)
+        router_ms = (time.perf_counter() - start) * 1000
 
         if route.intent == "small_talk" and route.reply.strip():
+            logger.info("Routed %r -> small_talk router_ms=%d", question, router_ms)
             return {"answer": route.reply.strip(), "sources": []}
 
+        t = time.perf_counter()
         docs = self.retriever.invoke(route.search_query.strip() or question)
+        retrieval_ms = (time.perf_counter() - t) * 1000
+
+        t = time.perf_counter()
         answer = self.chain.invoke(
             {
                 "context": format_docs(docs),
                 "history": messages,
                 "question": question,
             }
+        )
+        llm_ms = (time.perf_counter() - t) * 1000
+        logger.info(
+            "Routed %r -> %s router_ms=%d retrieval_ms=%d llm_ms=%d total_ms=%d",
+            question,
+            route.intent,
+            router_ms,
+            retrieval_ms,
+            llm_ms,
+            (time.perf_counter() - start) * 1000,
         )
         sources = [
             {
