@@ -16,6 +16,7 @@ mic ──▶ Deepgram STT ──▶ RAGChain (unchanged logic) ──▶ Deepgr
 | Provider | Deepgram for both STT and TTS |
 | Language | English only |
 | Architecture | Cascaded pipeline (STT → our RAG → TTS) that we control, not an all-in-one voice-agent API |
+| Phase 2 answers | Start with the existing whole-answer `answer()`. Stream the LLM answer only if the timing logs show it's needed |
 
 ### Why a cascaded pipeline, not an all-in-one voice agent
 
@@ -49,7 +50,7 @@ All-in-one APIs (Deepgram Voice Agent, OpenAI Realtime, Gemini Live) would make 
 | Area | Today | Impact |
 |------|-------|--------|
 | `backend/rag.py` prompts | Already written for speech ("will be read aloud", 2–4 sentences) | No prompt changes |
-| `RAGChain.answer()` | Synchronous and returns the whole answer | Fine for Phase 1. Phase 2 needs an async streaming version |
+| `RAGChain.answer()` | Synchronous and returns the whole answer | Fine for Phase 1 and for Phase 2 at first (run in a threadpool). An async streaming version is optional, later (2a-2) |
 | Intent router | An extra Groq call before every answer (~0.2–0.4 s) | Acceptable. Phase 2 can overlap it with Flux eager end-of-turn |
 | Conversation history | Stored in the browser and sent with every `/api/chat` | Phase 1 reuses this as is. Phase 2 seeds a server-side session from it |
 | `Composer.jsx` | Only a Send button | Add a mic button |
@@ -164,7 +165,8 @@ Browser (React)                              FastAPI  /api/ws/voice             
 mic → AudioWorklet → PCM16 16 kHz, 80 ms ─ws─▶ mic_pump ──────────────────────────────▶ Flux /v2/listen
                                               stt_events ◀── StartOfTurn/Update/EndOfTurn ─
                                                 on EndOfTurn → answer_task:
-                                                  RAGChain.astream_answer()
+                                                  RAGChain.answer() (whole answer;
+                                                  astream_answer() later, optional)
                                                   → sentence chunker ── Speak/Flush ───▶ Aura-2 /v1/speak (ws)
 speaker ◀─ AudioWorklet ◀── PCM16 24 kHz ───ws─ tts_pump ◀──────────── audio ──────────
 UI ◀── JSON events (status, partial transcript, answer text, sources, stop_playback) ──
@@ -189,20 +191,23 @@ The backend sits between the browser and Deepgram, so the API key never reaches 
 | `partial_transcript` | Live text from Flux `Update` |
 | `user_turn` | Final transcript of the user's turn. The UI appends it as a user message |
 | `answer_sources` | Sources for the current answer (sent before the text) |
-| `answer_delta` | Next piece of answer text (streams into the assistant message) |
+| `answer_delta` | Next piece of answer text (streams into the assistant message). With the whole-answer `answer()`, the full text arrives as one delta |
 | `answer_done` | Answer finished; carries `interrupted: bool` |
 | `stop_playback` | Barge-in: the browser must drop its queued audio now |
 | `error` | Message the UI shows, after which the session ends |
 
 ### Backend
 
-- **`RAGChain.astream_answer(question, history)`** is an async generator that yields `("sources", [...])` and then `("delta", text)`.
+- **Answers, first version (2a-1):** `answer_task` calls the existing `RAGChain.answer()` in `run_in_threadpool` and gets the whole answer at once. It sends `answer_sources`, then the full text as one `answer_delta`, then sends the text to Aura-2 as one `Speak` + `Flush` (split at ~1900 characters if longer). No changes to `rag.py`.
+  - Barge-in can stop the *speech* but not the LLM call, which runs in a thread and finishes anyway. That's acceptable because answers are short.
+- **Optional later (2a-2), only if the timing logs show the full answer wait is too slow:** `RAGChain.astream_answer(question, history)`, an async generator that yields `("sources", [...])` and then `("delta", text)`.
   - Router: uses `ainvoke`.
   - Retrieval: Milvus Lite is synchronous, so it runs in `run_in_threadpool`.
   - Answer: `self.chain.astream(...)`.
   - Small-talk replies are yielded as a single delta.
   - `answer()` stays as it is for `/api/chat`. Shared helpers keep the two from drifting apart.
-- **Sentence chunker** (`backend/voice.py`): collects tokens until a sentence ends (`.?!` followed by whitespace, or a newline). It skips abbreviations ("e.g.", "Dr.") and decimals ("3.5").
+  - Expected gain: ~0.3–0.6 s, and barge-in can then also stop generation.
+- **Sentence chunker** (`backend/voice.py`, needed only with 2a-2): collects tokens until a sentence ends (`.?!` followed by whitespace, or a newline). It skips abbreviations ("e.g.", "Dr.") and decimals ("3.5").
   - The **first sentence** is sent immediately (`Speak` + `Flush`), because that is the latency win.
   - Later sentences are sent with `Speak` as they arrive, but flushed only every ~200 characters and at the end. This stays under the 20-flushes-per-minute limit.
 - **Session tasks** (one Flux socket and one Aura-2 socket per browser session, all under one `asyncio.TaskGroup`):
@@ -241,13 +246,15 @@ New config: `deepgram_flux_model = "flux-general-en"`, `deepgram_eot_threshold =
 
 ### Phase 2 latency target (end of user speech → first audio)
 
-| Step | Target |
-|------|--------|
-| Flux end-of-turn detection | 0.2–0.4 s |
-| Router + retrieval | 0.3–0.5 s (less with eager EOT) |
-| First LLM sentence | 0.2–0.3 s |
-| Aura-2 first audio | ~0.2 s |
-| **Total** | **~0.9–1.2 s** |
+| Step | 2a-1 (whole answer) | 2a-2 (streamed answer) |
+|------|---------------------|------------------------|
+| Flux end-of-turn detection | 0.2–0.4 s | 0.2–0.4 s |
+| Router + retrieval | 0.3–0.5 s | 0.3–0.5 s (less with eager EOT) |
+| LLM | whole answer: 0.3–0.8 s | first sentence: 0.2–0.3 s |
+| Aura-2 first audio | ~0.2 s | ~0.2 s |
+| **Total** | **~1.0–1.9 s** | **~0.9–1.2 s** |
+
+The timing logs (milestone 0) decide whether 2a-2 is worth doing.
 
 ### Fallback if Phase 2 becomes too much work
 
@@ -277,7 +284,7 @@ New config: `deepgram_flux_model = "flux-general-en"`, `deepgram_eot_threshold =
 | `backend/config.py`, `.env.example`, `README.md` | 1 (+2) | Deepgram settings, API table, usage |
 | `backend/voice.py` | 1 (+2) | New. REST `transcribe` / `synthesize` and `clean_for_speech`; later the chunker and WebSocket session |
 | `backend/main.py` | 1 (+2) | `/api/stt`, `/api/tts`, httpx client in `lifespan`; later `/api/ws/voice` |
-| `backend/rag.py` | 2 | `astream_answer()`, shared helpers with `answer()` |
+| `backend/rag.py` | 0 (+2a-2) | Timing logs (`router_ms`, `retrieval_ms`, `llm_ms`); later, optionally, `astream_answer()` with shared helpers |
 | `requirements.txt` | 1 | `httpx`, `python-multipart` (`websockets` already comes with `uvicorn[standard]`) |
 | `frontend/src/api.js` | 1 | `transcribe`, `speak` |
 | `frontend/src/voice/useRecorder.js`, `usePlayer.js` | 1 | New |
@@ -295,10 +302,10 @@ New config: `deepgram_flux_model = "flux-general-en"`, `deepgram_eot_threshold =
 - `transcribe` / `synthesize` with mocked httpx responses: success, empty transcript, 401, 429, timeout.
 - `synthesize` splitting of text over 2000 characters.
 - `clean_for_speech`: strips markdown and keeps sentence punctuation.
-- Sentence chunker: abbreviations, decimals, a very long sentence with no punctuation, and the flush limit.
-- `astream_answer` with a fake LLM: small-talk path, document path, and sources arriving before deltas.
+- Sentence chunker (2a-2): abbreviations, decimals, a very long sentence with no punctuation, and the flush limit.
+- `astream_answer` with a fake LLM (2a-2): small-talk path, document path, and sources arriving before deltas.
 
-**Integration (needs `DEEPGRAM_API_KEY`, skipped otherwise)**
+**Integration (needs `DEEPGRAM_API_KEY`, skipped otherwise; add before merging, not needed now)**
 - Send a short WAV of a known question ("What is habit stacking?") to `/api/stt`: the transcript contains the key terms.
 - `/api/tts` returns non-empty `audio/mpeg`.
 
@@ -308,7 +315,7 @@ New config: `deepgram_flux_model = "flux-general-en"`, `deepgram_eot_threshold =
 - Silence or only noise → "didn't catch that", with no RAG call.
 - Mic permission denied; no Deepgram key; wrong key.
 - A long "explain in detail" answer (over 2000 characters) is spoken fully.
-- Chrome, Firefox and Safari (recording formats differ).
+- Chrome, Firefox and Safari (recording formats differ). Done before merging.
 - Phase 2:
   - interrupt mid-answer: playback stops within about 300 ms;
   - pause mid-sentence: the bot should not cut the user off;
@@ -321,9 +328,14 @@ New config: `deepgram_flux_model = "flux-general-en"`, `deepgram_eot_threshold =
 
 1. ✅ **1a. Backend voice.** Config, `backend/voice.py`, `/api/stt` and `/api/tts`, and unit tests. Verified with `curl`.
 2. ✅ **1b. Push-to-talk UI.** Recorder and player hooks, mic button, "Speak replies" toggle, speaking indicator. Measured in Chrome (fake mic): transcript 0.96 s after stopping, spoken answer starts 2.83 s after stopping (target < 3 s).
-3. **2a. Streaming backend.** `astream_answer`, chunker, `/api/ws/voice` with Flux and Aura-2 streaming, without barge-in. *Decision point: continue by hand or switch to Pipecat.*
-4. **2b. Hands-free UI.** `useVoiceSession`, worklets, barge-in with echo guard, status UI. Latency about 1.2 s or less.
-5. **2c. Tuning.** `eot_threshold`, eager end-of-turn, voice choice, silence auto-stop.
+Phase 2 work happens on the branch `feature/voice-handsfree` (from `feature/deepgram-voice`) and is merged once it works.
+
+3. **0. Timing logs.** Log `router_ms`, `retrieval_ms` and `llm_ms` per turn in `rag.py`, so latency is measured, not guessed. Optional: hold Space to talk.
+4. **2a-1. Real-time backend, whole answers.** `/api/ws/voice`: Flux (`flux-general-en`) for live STT and end of turn, the existing `answer()`, and Aura-2 over WebSocket (linear16, 24 kHz). Origin check, session limit, cleanup. No barge-in yet. Tested with a Python client script that streams a WAV file. First check that the Deepgram key has Flux access and that `deepgram-sdk` 7.12.0 supports `/v2/listen`. *Decision point: continue by hand or switch to Pipecat.*
+5. **2b. Hands-free UI.** `useVoiceSession`, worklets, barge-in with echo guard, status UI.
+6. **2a-2. Streamed answers (optional).** `astream_answer` and the sentence chunker, only if the timing logs show the whole-answer wait is too slow. Target: about 1.2 s or less.
+7. **2c. Tuning.** `eot_threshold`, eager end-of-turn, voice choice, silence auto-stop.
+8. **Before merging.** Integration tests against real Deepgram, the manual checklist, and Firefox and Safari.
 
 ## Later (out of scope now)
 
