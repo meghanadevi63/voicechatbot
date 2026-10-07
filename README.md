@@ -57,7 +57,7 @@ Milvus Lite allows only one process to open the database. While the backend is r
 
 With `DEEPGRAM_API_KEY` set, the chat gets voice in both directions (Deepgram Nova-3 for speech-to-text, Aura-2 for text-to-speech):
 
-- **Ask by voice:** click the mic next to Send, speak, then click send (or press Enter). Esc cancels. Recordings stop automatically after 60 s.
+- **Ask by voice:** click the mic next to Send, speak, then click send (or press Enter). Esc cancels. Or **hold Space** to talk and release it to send (when the message box is empty or not focused). Recordings stop automatically after 60 s.
 - **Spoken replies:** answers are read aloud while "Speak replies" is on (sidebar). Every answer also has a Listen button.
 
 Browsers only allow the microphone on `https://` or `localhost`. Without a Deepgram key the mic is disabled and text chat works as usual.

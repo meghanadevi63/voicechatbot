@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import useHoldToTalk from "../voice/useHoldToTalk.js";
 import useRecorder from "../voice/useRecorder.js";
 import { CloseIcon, MicIcon, SendIcon } from "./icons.jsx";
 
@@ -46,9 +47,20 @@ export default function Composer({ onSend, disabled, voice }) {
     recorder.start();
   };
 
+  const holding = useHoldToTalk({
+    recorder,
+    canStart: voice.available && !disabled && !busy,
+    start: startRecording,
+    composerRef: ref,
+  });
+
   const micTitle = !voice.available
     ? "Voice input is off: the backend has no DEEPGRAM_API_KEY"
-    : "Ask by voice";
+    : "Ask by voice (or hold Space)";
+  const idleHint = voice.available ? `${DEFAULT_HINT.slice(0, -1)}, hold Space to talk.` : DEFAULT_HINT;
+  const recordingHint = holding
+    ? "Speak your question. Release Space to send, Esc to cancel."
+    : "Speak your question. Enter or the send button to finish, Esc to cancel.";
 
   return (
     <div className="composer-wrap">
@@ -124,8 +136,7 @@ export default function Composer({ onSend, disabled, voice }) {
         </form>
       )}
       <p className={`hint ${voice.notice ? "hint-notice" : ""}`} role={voice.notice ? "status" : undefined}>
-        {voice.notice ||
-          (recording ? "Speak your question. Enter or the send button to finish, Esc to cancel." : DEFAULT_HINT)}
+        {voice.notice || (recording ? recordingHint : idleHint)}
       </p>
     </div>
   );

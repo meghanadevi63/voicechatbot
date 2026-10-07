@@ -63,7 +63,7 @@ All-in-one APIs (Deepgram Voice Agent, OpenAI Realtime, Gemini Live) would make 
 
 ### User experience
 
-1. The user clicks the mic button (or holds Space while the textarea is not focused), speaks, then clicks again to stop. A timer and a cancel button are shown. Recording stops automatically after 60 s.
+1. The user clicks the mic button (or holds Space while focus is outside fields and buttons, or the message box is empty; a tap under 250 ms does nothing), speaks, then clicks again or releases Space to stop. A timer and a cancel button are shown. Recording stops automatically after 60 s.
 2. The transcript appears as the user's message, exactly like a typed question.
 3. The text answer and its sources appear as they do today, and the answer is read aloud.
 4. A **"Speak replies"** toggle in the sidebar (saved in `localStorage`, on by default) also speaks answers to typed questions.
@@ -330,7 +330,7 @@ The timing logs (milestone 0) decide whether 2a-2 is worth doing.
 2. ✅ **1b. Push-to-talk UI.** Recorder and player hooks, mic button, "Speak replies" toggle, speaking indicator. Measured in Chrome (fake mic): transcript 0.96 s after stopping, spoken answer starts 2.83 s after stopping (target < 3 s).
 Phase 2 work happens on the branch `feature/voice-handsfree` (from `feature/deepgram-voice`) and is merged once it works.
 
-3. **0. Timing logs.** Log `router_ms`, `retrieval_ms` and `llm_ms` per turn in `rag.py`, so latency is measured, not guessed. Optional: hold Space to talk.
+3. ✅ **0. Timing logs and hold Space to talk.** Log `router_ms`, `retrieval_ms` and `llm_ms` per turn in `rag.py`, so latency is measured, not guessed. First measurement: a warm document question takes ~2 s end to end, more than the 0.6–1.3 s estimated. Hold Space to talk (`voice/useHoldToTalk.js`), tested in headless Chrome with a fake mic.
 4. **2a-1. Real-time backend, whole answers.** `/api/ws/voice`: Flux (`flux-general-en`) for live STT and end of turn, the existing `answer()`, and Aura-2 over WebSocket (linear16, 24 kHz). Origin check, session limit, cleanup. No barge-in yet. Tested with a Python client script that streams a WAV file. First check that the Deepgram key has Flux access and that `deepgram-sdk` 7.12.0 supports `/v2/listen`. *Decision point: continue by hand or switch to Pipecat.*
 5. **2b. Hands-free UI.** `useVoiceSession`, worklets, barge-in with echo guard, status UI.
 6. **2a-2. Streamed answers (optional).** `astream_answer` and the sentence chunker, only if the timing logs show the whole-answer wait is too slow. Target: about 1.2 s or less.

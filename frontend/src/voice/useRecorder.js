@@ -98,7 +98,7 @@ export default function useRecorder({ onRecorded, onError }) {
       cleanup();
       if (!s.keep) return;
       if (seconds < MIN_SECONDS || !blob.size) {
-        callbacks.current.onError?.("That was too short. Click the mic, speak, then click send.");
+        callbacks.current.onError?.("That was too short. Speak your question, then send (or release Space).");
         return;
       }
       callbacks.current.onRecorded?.(blob);
