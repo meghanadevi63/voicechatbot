@@ -121,6 +121,13 @@ def stop(ws):
         pass
 
 
+def finish_reply(ws):
+    """Receive one reply up to answer_done, then report playback finished like the browser."""
+    messages = receive_until(ws, "answer_done")
+    ws.send_json({"type": "playback_done"})
+    return messages + receive_until(ws, "status", "listening")
+
+
 def types(messages):
     return [m if isinstance(m, bytes) else (m["type"], m.get("status")) if m["type"] == "status" else m["type"] for m in messages]
 
@@ -132,7 +139,7 @@ def test_full_turn(setup):
         assert ws.receive_json() == {"type": "status", "status": "listening"}
 
         ws.send_bytes(b"say:What is habit stacking?")
-        messages = receive_until(ws, "status", "listening")
+        messages = finish_reply(ws)
         stop(ws)
 
     assert types(messages) == [
@@ -162,14 +169,105 @@ def test_follow_up_turn_gets_previous_turn_as_history(setup):
         ws.send_json({"type": "start", "history": []})
         ws.receive_json()
         ws.send_bytes(b"say:first question")
-        receive_until(ws, "status", "listening")
+        finish_reply(ws)
         ws.send_bytes(b"say:second question")
-        receive_until(ws, "status", "listening")
+        finish_reply(ws)
         stop(ws)
     assert rag.calls[1] == (
         "second question",
         [{"role": "user", "content": "first question"}, {"role": "assistant", "content": "Answer to first question"}],
     )
+
+
+def test_barge_in_while_speaking_stops_playback_and_answers_the_new_turn(setup):
+    client, voice, rag = setup
+    with client.websocket_connect("/api/ws/voice") as ws:
+        ws.send_json({"type": "start"})
+        ws.receive_json()
+        ws.send_bytes(b"say:first question")
+        receive_until(ws, "answer_done")  # all audio sent; the browser is still playing it
+        ws.send_bytes(b"say:wait, what about habits?")
+        messages = receive_until(ws, "user_turn")
+        finish_reply(ws)
+        stop(ws)
+    assert types(messages) == ["partial_transcript", "stop_playback", ("status", "listening"), "user_turn"]
+    assert voice.speaker.cleared == 1
+    assert [q for q, _ in rag.calls] == ["first question", "wait, what about habits?"]
+
+
+def test_barge_in_while_thinking_cancels_the_answer(setup):
+    client, voice, rag = setup
+    slow = rag.answer
+    rag.answer = lambda q, h: (__import__("time").sleep(0.5), slow(q, h))[1]
+    with client.websocket_connect("/api/ws/voice") as ws:
+        ws.send_json({"type": "start"})
+        ws.receive_json()
+        ws.send_bytes(b"say:first question")
+        receive_until(ws, "status", "thinking")
+        ws.send_bytes(b"say:never mind that")
+        messages = receive_until(ws, "user_turn")
+        rest = finish_reply(ws)
+        stop(ws)
+    assert types(messages) == [
+        "partial_transcript",
+        "answer_done",
+        "stop_playback",
+        ("status", "listening"),
+        "user_turn",
+    ]
+    assert messages[1] == {"type": "answer_done", "interrupted": True}
+    # Only the new question was answered and spoken
+    assert [m["text"] for m in rest if isinstance(m, dict) and m["type"] == "answer_delta"] == ["Answer to never mind that"]
+    assert voice.speaker.spoken == ["Answer to never mind that"]
+
+
+def test_one_word_while_speaking_does_not_interrupt(setup):
+    client, voice, rag = setup
+    with client.websocket_connect("/api/ws/voice") as ws:
+        ws.send_json({"type": "start"})
+        ws.receive_json()
+        ws.send_bytes(b"say:first question")
+        receive_until(ws, "answer_done")
+        ws.send_bytes(b"say:mm")
+        ws.send_json({"type": "playback_done"})
+        messages = receive_until(ws, "status", "listening")
+        stop(ws)
+    assert types(messages) == ["partial_transcript", ("status", "listening")]
+    assert voice.speaker.cleared == 0
+    assert len(rag.calls) == 1
+
+
+def test_stop_word_interrupts_and_is_not_answered(setup):
+    client, voice, rag = setup
+    with client.websocket_connect("/api/ws/voice") as ws:
+        ws.send_json({"type": "start"})
+        ws.receive_json()
+        ws.send_bytes(b"say:first question")
+        receive_until(ws, "answer_done")
+        ws.send_bytes(b"say:Stop.")
+        messages = receive_until(ws, "status", "listening")  # interrupted on the partial transcript
+        messages += receive_until(ws, "status", "listening")  # its end of turn: not answered
+        ws.send_bytes(b"say:Okay, wait.")  # nothing to stop now: still not a question
+        messages += receive_until(ws, "status", "listening")
+        stop(ws)
+    assert types(messages) == [
+        "partial_transcript",
+        "stop_playback",
+        ("status", "listening"),
+        ("status", "listening"),
+        "partial_transcript",
+        ("status", "listening"),
+    ]
+    assert voice.speaker.cleared == 1
+    assert [q for q, _ in rag.calls] == ["first question"]
+
+
+@pytest.mark.parametrize(
+    "text, command",
+    [("Stop.", True), ("OK, wait", True), ("hold on, stop please", True), ("Stop smoking tips?", False), ("ok", False)],
+)
+def test_is_stop_command(text, command):
+    assert voice_session.is_stop_command(text) is command
 
 
 def test_audio_reaches_flux_and_empty_turns_are_ignored(setup):
@@ -229,7 +327,7 @@ def test_rag_failure_reports_and_keeps_listening(setup):
         ws.send_bytes(b"say:hello")
         messages = receive_until(ws, "status", "listening")
         stop(ws)
-    assert messages[-2]["type"] == "answer_done" and "went wrong" in messages[-2]["error"]
+    assert messages[-2]["type"] == "answer_done" and "answer that" in messages[-2]["error"]
 
 
 def test_deepgram_connect_error_is_reported(setup):

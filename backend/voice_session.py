@@ -5,6 +5,7 @@ Protocol (see plan_voice.md, "WebSocket protocol"):
 Browser -> server
   JSON {"type": "start", "history": [...]}   first message; seeds the conversation
   binary                                     mic audio, PCM16 mono 16 kHz, ~80 ms per frame
+  JSON {"type": "playback_done"}             the browser finished playing the reply audio
   JSON {"type": "stop"}                      ends the session
 
 Server -> browser
@@ -14,16 +15,24 @@ Server -> browser
   JSON {"type": "user_turn", "text": ...}
   JSON {"type": "answer_sources", "sources": [...]}
   JSON {"type": "answer_delta", "text": ...}
-  JSON {"type": "answer_done", "interrupted": false, "error"?: ...}
+  JSON {"type": "answer_done", "interrupted": bool, "error"?: ...}
+  JSON {"type": "stop_playback"}             barge-in: drop all queued reply audio now
   JSON {"type": "error", "message": ...}     the session ends after this
 
-"speaking" means reply audio is being sent. Audio arrives faster than it plays,
-so the browser keeps showing "speaking" until its own playback has finished.
+Reply audio arrives several times faster than it plays, so the bot counts as
+speaking until the browser reports playback_done (then status -> listening).
+
+Barge-in: if the user says at least BARGE_IN_MIN_WORDS while the bot is
+thinking or speaking, the answer is cancelled, Aura-2 is cleared and the
+browser gets stop_playback. Shorter sounds ("mm", or the bot's own voice leaking
+past echo cancellation as a single word) don't interrupt, except stop words
+("Stop.", "Wait"): those interrupt on their own and aren't answered.
 """
 
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 
@@ -38,6 +47,17 @@ logger = logging.getLogger(__name__)
 STALL_TIMEOUT_S = 3.0
 # The RAG uses only the last few turns; this just bounds memory for long sessions.
 MAX_HISTORY = 20
+# Echo guard: words the user must say before they interrupt the bot.
+BARGE_IN_MIN_WORDS = 2
+# ...except these, which interrupt on their own. A turn made only of them
+# ("Stop.", "OK wait") just stops the bot; it isn't sent to the RAG as a question.
+STOP_WORDS = {"stop", "wait", "pause", "quiet", "enough", "cancel", "shush"}
+FILLER_WORDS = {"ok", "okay", "please", "now", "just", "hey", "no", "hold", "on"}
+
+
+def is_stop_command(transcript: str) -> bool:
+    words = set(re.findall(r"[a-z']+", transcript.lower()))
+    return bool(words & STOP_WORDS) and words <= STOP_WORDS | FILLER_WORDS
 
 AnswerFn = Callable[[str, list[dict]], Awaitable[dict]]
 
@@ -71,6 +91,7 @@ class VoiceSession:
         self.last_audio = 0.0
         self.first_audio_at: float | None = None
         self.dropping = False  # after clear(): ignore audio until Aura-2 confirms "Cleared"
+        self.playing = False  # the browser is playing reply audio (until playback_done)
 
     # --- sending to the browser ------------------------------------------------
 
@@ -126,20 +147,54 @@ class VoiceSession:
                     data = json.loads(msg["text"])
                 except json.JSONDecodeError:
                     raise ProtocolError("Messages must be JSON or binary audio") from None
-                if isinstance(data, dict) and data.get("type") == "stop":
+                kind = data.get("type") if isinstance(data, dict) else None
+                if kind == "stop":
                     return
+                if kind == "playback_done" and self.playing:
+                    self.playing = False
+                    await self.send_event("status", status="listening")
+
+    def bot_active(self) -> bool:
+        """Thinking, sending speech, or the browser is still playing it."""
+        return self.playing or bool(self.answer_task and not self.answer_task.done())
 
     async def stt_events(self) -> None:
         """Flux turn events -> live transcript in the UI; a finished turn starts an answer."""
         async for turn in self.stt.events():
+            command = is_stop_command(turn.transcript)
+            enough_words = command or len(turn.transcript.split()) >= BARGE_IN_MIN_WORDS
             if turn.event in ("StartOfTurn", "Update", "TurnResumed") and turn.transcript:
                 await self.send_event("partial_transcript", text=turn.transcript)
+                if self.bot_active() and enough_words:
+                    await self.barge_in(turn.transcript)
             elif turn.event == "EndOfTurn" and turn.transcript:
-                if self.answer_task and not self.answer_task.done():
-                    # No barge-in yet (milestone 2b): drop speech while the bot is answering.
-                    logger.info("Ignored turn while answering: %r", turn.transcript)
+                if command:
+                    if self.bot_active():
+                        await self.barge_in(turn.transcript)
+                    else:  # nothing to stop; clear the live transcript
+                        await self.send_event("status", status="listening")
+                    logger.info("Stop command, not answered: %r", turn.transcript)
                     continue
+                if self.bot_active():
+                    if not enough_words:
+                        logger.info("Ignored short turn while the bot is answering: %r", turn.transcript)
+                        continue
+                    await self.barge_in(turn.transcript)
                 self.answer_task = asyncio.create_task(self.respond(turn.transcript, time.perf_counter()))
+
+    async def barge_in(self, heard: str) -> None:
+        """The user started talking over the bot: stop answering and speaking now."""
+        logger.info("Barge-in: %r", heard)
+        task = self.answer_task
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await self.send_event("answer_done", interrupted=True)
+        self.playing = False
+        self.dropping = True
+        await self.tts.clear()
+        await self.send_event("stop_playback")
+        await self.send_event("status", status="listening")
 
     async def tts_pump(self) -> None:
         """Aura-2 audio -> browser."""
@@ -150,6 +205,7 @@ class VoiceSession:
                 self.last_audio = time.perf_counter()
                 if self.first_audio_at is None:
                     self.first_audio_at = self.last_audio
+                    self.playing = True
                     await self.send_event("status", status="speaking")
                 await self.send_audio(item)
             elif item == "Flushed" and self.flushed:
@@ -168,7 +224,7 @@ class VoiceSession:
             result = await self.answer(question, list(self.history))
         except Exception:
             logger.exception("Answer failed for %r", question)
-            await self.send_event("answer_done", interrupted=False, error="Sorry, something went wrong answering that.")
+            await self.send_event("answer_done", interrupted=False, error="Couldn't answer that. Please try again.")
             await self.send_event("status", status="listening")
             return
         answer_at = time.perf_counter()
@@ -192,7 +248,8 @@ class VoiceSession:
         )
         done = {"error": speech_error} if speech_error else {}
         await self.send_event("answer_done", interrupted=False, **done)
-        await self.send_event("status", status="listening")
+        if not self.playing:  # otherwise "listening" follows the browser's playback_done
+            await self.send_event("status", status="listening")
 
     async def speak(self, text: str) -> str | None:
         """Send the answer to Aura-2 and wait until all its audio has gone out.

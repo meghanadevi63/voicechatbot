@@ -59,6 +59,7 @@ With `DEEPGRAM_API_KEY` set, the chat gets voice in both directions (Deepgram No
 
 - **Ask by voice:** click the mic next to Send, speak, then click send (or press Enter). Esc cancels. Or **hold Space** to talk and release it to send (when the message box is empty or not focused). Recordings stop automatically after 60 s.
 - **Spoken replies:** answers are read aloud while "Speak replies" is on (sidebar). Every answer also has a Listen button.
+- **Hands-free conversation:** click the waveform button next to the mic and just talk. The bot answers when you finish speaking (Deepgram Flux detects the end of your turn) and you can interrupt it by speaking over it. "Stop" or "Wait" alone also stops it. Stop or Esc ends hands-free; it also stops by itself after 2 minutes of silence.
 
 Browsers only allow the microphone on `https://` or `localhost`. Without a Deepgram key the mic is disabled and text chat works as usual.
 
@@ -71,7 +72,7 @@ Browsers only allow the microphone on `https://` or `localhost`. Without a Deepg
 | POST   | `/api/ingest` | –                                     | `{"files", "pages", "chunks"}`  |
 | POST   | `/api/stt`    | multipart `audio` file (max 10 MB)    | `{"transcript": "..."}` (`""` if nothing was heard) |
 | POST   | `/api/tts`    | `{"text": "..."}` (max 5000 chars)     | streamed `audio/mpeg`           |
-| WS     | `/api/ws/voice` | hands-free voice (in progress; no UI yet) | see `backend/voice_session.py` |
+| WS     | `/api/ws/voice` | hands-free voice                      | see `backend/voice_session.py` |
 
 `/api/stt` and `/api/tts` return 503 when `DEEPGRAM_API_KEY` is not set; text chat works without it.
 

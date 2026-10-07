@@ -46,6 +46,13 @@ export const warmUpVoice = () => send("/voice/warmup", { method: "POST" }).catch
 export const speak = (text, signal) =>
   send("/tts", { method: "POST", body: JSON.stringify({ text }), signal });
 
+// WebSocket URL for hands-free voice, on the same host as the API.
+export function voiceSocketUrl() {
+  const url = new URL(`${BASE}/ws/voice`, window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
+
 export const transcribe = (blob) => {
   const form = new FormData();
   const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";

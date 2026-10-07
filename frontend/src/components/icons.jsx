@@ -61,6 +61,12 @@ export const MicIcon = () => (
   </svg>
 );
 
+export const WaveIcon = () => (
+  <svg {...base}>
+    <path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" />
+  </svg>
+);
+
 export const SpeakerIcon = () => (
   <svg {...base} width={16} height={16}>
     <path d="M11 5 6 9H3v6h3l5 4z" />

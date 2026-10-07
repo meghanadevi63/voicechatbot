@@ -1,22 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import useHoldToTalk from "../voice/useHoldToTalk.js";
 import useRecorder from "../voice/useRecorder.js";
-import { CloseIcon, MicIcon, SendIcon } from "./icons.jsx";
+import { CloseIcon, MicIcon, SendIcon, StopIcon, WaveIcon } from "./icons.jsx";
 
 const MAX_HEIGHT = 200;
 const DEFAULT_HINT =
   "Answers come only from your indexed documents. Enter to send, Shift+Enter for a new line.";
 
+const HANDS_FREE_LABELS = {
+  connecting: "Connecting…",
+  listening: "Listening",
+  thinking: "Thinking…",
+  speaking: "Speaking",
+};
+
 const formatTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 // voice: { available, transcribing, notice, onRecorded, onStart, onError }
-export default function Composer({ onSend, disabled, voice }) {
+// handsFree: { active, status, partial, level, start, stop } from useVoiceSession
+export default function Composer({ onSend, disabled, voice, handsFree }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
   const stopRef = useRef(null);
   const recorder = useRecorder({ onRecorded: voice.onRecorded, onError: voice.onError });
   const recording = recorder.status === "recording";
-  const busy = recording || recorder.status === "starting" || voice.transcribing;
+  const busy = recording || recorder.status === "starting" || voice.transcribing || handsFree.active;
 
   // Grow the textarea with its content, up to MAX_HEIGHT
   useEffect(() => {
@@ -29,6 +37,15 @@ export default function Composer({ onSend, disabled, voice }) {
   useEffect(() => {
     if (!disabled && !busy) ref.current?.focus();
   }, [disabled, busy]);
+
+  // Esc ends hands-free
+  const { active: handsFreeActive, stop: stopHandsFree } = handsFree;
+  useEffect(() => {
+    if (!handsFreeActive) return;
+    const onKey = (e) => e.key === "Escape" && stopHandsFree();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handsFreeActive, stopHandsFree]);
 
   // While recording, Enter sends and Escape cancels
   useEffect(() => {
@@ -62,9 +79,29 @@ export default function Composer({ onSend, disabled, voice }) {
     ? "Speak your question. Release Space to send, Esc to cancel."
     : "Speak your question. Enter or the send button to finish, Esc to cancel.";
 
+  let hint = voice.notice || (recording ? recordingHint : idleHint);
+  if (handsFree.active && !voice.notice) {
+    hint = "Hands-free: just talk. Speak over an answer to interrupt it. Esc or Stop ends it.";
+  }
+
   return (
     <div className="composer-wrap">
-      {busy ? (
+      {handsFree.active ? (
+        <div className={`composer recorder handsfree hf-${handsFree.status}`}>
+          <span
+            className="rec-dot"
+            style={{ "--level": handsFree.status === "listening" ? handsFree.level : 0 }}
+            aria-hidden="true"
+          />
+          <span className="rec-label hf-label" aria-live="polite">
+            <span className="hf-status">{HANDS_FREE_LABELS[handsFree.status]}</span>
+            {handsFree.partial && <span className="hf-partial">{handsFree.partial}</span>}
+          </span>
+          <button className="hf-stop" onClick={handsFree.stop} aria-label="Stop hands-free">
+            <StopIcon /> Stop
+          </button>
+        </div>
+      ) : busy ? (
         <div
           className={`composer recorder ${recording ? "is-recording" : ""}`}
           onKeyDown={(e) => {
@@ -123,6 +160,16 @@ export default function Composer({ onSend, disabled, voice }) {
           <button
             className="icon-btn mic-btn"
             type="button"
+            onClick={handsFree.start}
+            disabled={disabled || !voice.available}
+            aria-label="Start hands-free conversation"
+            title={voice.available ? "Hands-free: talk back and forth, interrupt any time" : micTitle}
+          >
+            <WaveIcon />
+          </button>
+          <button
+            className="icon-btn mic-btn"
+            type="button"
             onClick={startRecording}
             disabled={disabled || !voice.available}
             aria-label="Ask by voice"
@@ -136,7 +183,7 @@ export default function Composer({ onSend, disabled, voice }) {
         </form>
       )}
       <p className={`hint ${voice.notice ? "hint-notice" : ""}`} role={voice.notice ? "status" : undefined}>
-        {voice.notice || (recording ? recordingHint : idleHint)}
+        {hint}
       </p>
     </div>
   );

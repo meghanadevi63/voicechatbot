@@ -707,6 +707,68 @@ code {
   color: var(--text-muted);
 }
 
+/* Hands-free */
+
+.handsfree.hf-listening {
+  border-color: var(--bad);
+}
+
+.handsfree.hf-speaking .rec-dot,
+.handsfree.hf-thinking .rec-dot,
+.handsfree.hf-connecting .rec-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.handsfree.hf-speaking .rec-dot {
+  animation: hf-pulse 1s ease-in-out infinite;
+}
+
+@keyframes hf-pulse {
+  50% {
+    box-shadow: 0 0 0 8px var(--accent-soft);
+  }
+}
+
+.hf-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hf-partial {
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hf-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.hf-stop:hover {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.msg-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .via-voice {
   display: inline-flex;
   align-items: center;

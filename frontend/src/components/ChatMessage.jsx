@@ -58,7 +58,8 @@ export default function ChatMessage({ message, speech, speechError, onSpeak, onS
           {!error && onSpeak && (
             <div className="msg-actions">
               <SpeechButton speech={speech} onSpeak={onSpeak} onStop={onStopSpeech} />
-              {speechError && <span className="speech-error">{speechError}</span>}
+              {message.interrupted && <span className="msg-note">Interrupted</span>}
+              {(speechError || message.note) && <span className="speech-error">{speechError || message.note}</span>}
             </div>
           )}
           {sources?.length > 0 && <Sources sources={sources} />}

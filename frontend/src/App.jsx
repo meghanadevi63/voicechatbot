@@ -6,6 +6,7 @@ import EmptyState from "./components/EmptyState.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import { MenuIcon } from "./components/icons.jsx";
 import usePlayer from "./voice/usePlayer.js";
+import useVoiceSession from "./voice/useVoiceSession.js";
 
 const STORAGE_KEY = "docs-assistant-messages";
 const SPEAK_KEY = "docs-assistant-speak-replies";
@@ -51,6 +52,55 @@ export default function App() {
   const { play: playSpeech, stop: stopSpeech } = player;
   const bottomRef = useRef(null);
 
+  // Hands-free: server events stream into the same message list as typed questions.
+  const answerId = useRef(null); // assistant message being filled by answer_* events
+  const spokenId = useRef(null); // assistant message whose audio is playing
+  const updateMessage = (id, change) =>
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...change(m) } : m)));
+
+  const onVoiceEvent = useCallback((event) => {
+    switch (event.type) {
+      case "user_turn":
+        setMessages((prev) => [...prev, { id: newId(), role: "user", content: event.text, viaVoice: true }]);
+        break;
+      case "answer_sources": {
+        const id = newId();
+        answerId.current = id;
+        spokenId.current = id;
+        setMessages((prev) => [...prev, { id, role: "assistant", content: "", sources: event.sources }]);
+        break;
+      }
+      case "answer_delta":
+        updateMessage(answerId.current, (m) => ({ content: m.content + event.text }));
+        break;
+      case "answer_done": {
+        const id = answerId.current;
+        answerId.current = null;
+        if (id) updateMessage(id, () => ({ note: event.error, interrupted: event.interrupted }));
+        else if (event.error) {
+          setMessages((prev) => [...prev, { id: newId(), role: "assistant", content: event.error, error: true }]);
+        }
+        break;
+      }
+      case "stop_playback":
+        if (spokenId.current) updateMessage(spokenId.current, () => ({ interrupted: true }));
+        spokenId.current = null;
+        break;
+      case "error":
+        setVoiceNotice(event.message);
+        break;
+      case "idle_stop":
+        setVoiceNotice("Hands-free stopped after 2 minutes of silence.");
+        break;
+    }
+  }, []);
+  const handsFree = useVoiceSession({ onEvent: onVoiceEvent });
+  const handsFreeThinking = handsFree.status === "thinking" && messages.at(-1)?.role === "user";
+
+  useEffect(() => {
+    if (handsFree.status === "listening" || handsFree.status === "off") spokenId.current = null;
+  }, [handsFree.status]);
+
   useEffect(() => {
     try {
       localStorage.setItem(SPEAK_KEY, String(speakReplies));
@@ -87,7 +137,7 @@ export default function App() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, pending]);
+  }, [messages, pending, handsFreeThinking]);
 
   const ask = useCallback(
     async (question, { viaVoice = false } = {}) => {
@@ -148,6 +198,12 @@ export default function App() {
     onError: setVoiceNotice,
   };
 
+  const startHandsFree = useCallback(() => {
+    stopSpeech();
+    setVoiceNotice("");
+    handsFree.start(toHistory(messages));
+  }, [handsFree, messages, stopSpeech]);
+
   const reingest = useCallback(async () => {
     setIngest({ status: "running" });
     try {
@@ -157,12 +213,13 @@ export default function App() {
     }
   }, []);
 
+  const { stop: stopHandsFree } = handsFree;
   const clearChat = useCallback(() => {
     stopSpeech();
+    stopHandsFree(); // its server-side history would still hold the old chat
     setMessages([]);
     setSidebarOpen(false);
-  }, [stopSpeech]);
-
+  }, [stopSpeech, stopHandsFree]);
   const toggleSpeakReplies = useCallback(() => {
     if (speakReplies) stopSpeech();
     setSpeakReplies(!speakReplies);
@@ -207,12 +264,17 @@ export default function App() {
               ))
             )}
             {transcribing && <ChatMessage message={{ role: "user", typing: true }} />}
-            {pending && <ChatMessage message={{ role: "assistant", typing: true }} />}
+            {(pending || handsFreeThinking) && <ChatMessage message={{ role: "assistant", typing: true }} />}
             <div ref={bottomRef} />
           </div>
         </div>
 
-        <Composer onSend={ask} disabled={pending} voice={voice} />
+        <Composer
+          onSend={ask}
+          disabled={pending}
+          voice={voice}
+          handsFree={{ ...handsFree, start: startHandsFree }}
+        />
       </main>
     </div>
   );
