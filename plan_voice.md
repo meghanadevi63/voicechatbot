@@ -179,17 +179,21 @@ Push-to-talk currently sends the transcript as soon as it arrives, so the user c
 | Where new text goes | Always at the end of the box | Simple and predictable. Inserting at the cursor could come later |
 | Joining text | Add a single space, or nothing if the box ends with whitespace. Keep Nova-3's capitalisation | Lowercasing the first letter would break names such as "Atomic Habits" |
 | Box during recording and transcription | Read-only | The transcript can't clash with text typed at the same time |
-| Hold Space | Release also fills the box. It still starts only when focus is outside fields, or in an empty box | Space has to type normally in a box that has text |
+| Hold Space | Release also fills the box. It still starts only when focus is outside fields, or in an empty box. **Both auto-stops are off while Space is held**: only the release stops it | Space has to type normally in a box that has text. Holding already means "until I let go" |
+| Dictating while an answer is loading | Not now: the mic stays disabled while a request is pending, as today. Revisit later | Kept aside for now |
 | Spoken replies | Follow the "Speak replies" toggle, as typed questions do | Same as today |
 | `viaVoice` mark on the message | Set if any part of the sent text was dictated | Keeps the existing mic icon on voice questions |
-| Backend | No changes. `/api/stt` (Nova-3) and `/api/voice/warmup` stay as they are | |
+| Backend | No changes planned. `/api/stt` (Nova-3) and `/api/voice/warmup` stay as they are. Exception: if a 5-min clip goes over `TIMEOUT_S` (15 s, which includes the upload), give `transcribe` a longer timeout based on the clip size, without changing TTS | Clips were capped at 60 s before |
 
 ### Changes
 
-- **`voice/useRecorder.js`:** silence auto-stop, inside the existing level meter loop.
-  - Mark `heardSpeech` once the level goes above `SPEECH_LEVEL`. After that, stop with `finish(true)` when the level has stayed below it for `SILENCE_MS = 3000`.
+- **`voice/useRecorder.js`:** silence auto-stop.
+  - Run the check in the existing 250 ms interval, **not** in the `requestAnimationFrame` meter loop. The browser pauses `requestAnimationFrame` in background tabs, which would leave the mic on; it only slows intervals down. The meter loop stays purely visual.
+  - **Noise floor:** measure the level during the first ~300 ms. Count it as speech above `max(SPEECH_LEVEL, floor × 2.5)`, with `SPEECH_LEVEL` at about 0.1, tuned on a real mic. Without this, auto-gain can lift a fan or AC above a fixed threshold, and the 3 s stop would never fire.
+  - **Minimum speech:** set `heardSpeech` only after about 200 ms of speech without a gap over 300 ms, so a click or a cough (even repeated ones) doesn't start the countdown.
+  - After `heardSpeech`, stop with `finish(true)` when the level has stayed below the threshold for `SILENCE_MS = 3000`.
   - If `heardSpeech` is still false after `NO_SPEECH_MS = 15000`, stop with `finish(false)` and report "Didn't hear anything. Click the mic and try again." through `onError`.
-  - `SPEECH_LEVEL` is tuned on a real mic; start at about 0.1.
+  - `start({ autoStop })`: hold Space passes `false`, which turns off both auto-stops.
   - Without a meter (the `AudioContext` failed), there's no auto-stop and manual stop still works.
   - Remove `MAX_SECONDS` and the auto-stop at the limit. The timer only shows the elapsed time, and Composer no longer shows "/ 1:00".
   - Keep `MIN_SECONDS`. Add the `autoStopped` flag to the `onRecorded` callback, so the hint can say "Stopped after a pause".
@@ -204,7 +208,10 @@ Push-to-talk currently sends the transcript as soon as it arrives, so the user c
   - When the transcript arrives: `setText(appendTranscript(...))`, set a `dictated` flag, focus the box and put the cursor at the end.
   - On send or clear: reset `dictated`.
   - Update the hints: idle says "Click the mic or hold Space to dictate. It isn't sent until you press Enter."
-- **`voice/useHoldToTalk.js`:** no change in how it works. Releasing Space calls `recorder.stop()`, which now fills the box.
+  - Also disable the hands-free button while recording or transcribing.
+  - Announce "Transcribing…" and the notices ("Didn't hear anything", errors) with `aria-live`.
+  - The draft in the box isn't saved across a page reload, as today. That's out of scope.
+- **`voice/useHoldToTalk.js`:** unchanged apart from comments. Composer passes it a `start` that uses `autoStop: false`. Releasing Space calls `recorder.stop()`, which now fills the box.
 - **`styles.css`:** styles for the recording mic button (red, pulsing with `--level`), the read-only box, and the "Transcribing…" overlay. Drop the old `.composer.recorder` push-to-talk styles, which hands-free still partly uses, so check before removing any.
 - **`README.md`:** update the usage section.
 
@@ -220,6 +227,10 @@ The frontend has no unit test setup, so test as in 1b and 2b: headless Chrome wi
 - Click the mic and stay silent: stops after 15 s with "Didn't hear anything", with no `/api/stt` call and the box unchanged.
 - Only noise, then a manual stop: "didn't catch that", with the box unchanged.
 - Esc while recording: the box is unchanged. Hold and release Space: the box fills and nothing is sent.
+- Hold Space and pause for more than 3 s: still recording until Space is released.
+- Background noise (fan or music): the 3 s stop still fires after speaking. A single click or cough doesn't count as speech.
+- Switch to another tab mid-recording: the auto-stops still fire.
+- A 5-minute clip is transcribed within the timeout.
 - Transcription error (backend stopped): error notice and the box unchanged.
 - Hands-free still works as before.
 
@@ -409,7 +420,11 @@ Phase 2 work happens on the branch `feature/voice-handsfree` (from `feature/deep
    - After an interruption the server history keeps the whole answer, not just the part that was heard (answers aren't streamed yet).
    - Not tested yet: real laptop speakers (echo), Firefox and Safari.
    Original plan: `useVoiceSession`, worklets, barge-in with echo guard, status UI.
-6. **1c. Push-to-talk as dictation.** On branch `feature/ptt-dictation`, from `feature/voice-handsfree`. The transcript goes into the message box instead of being sent, more recordings add to it, and recording stops after 3 s of silence (15 s if nothing is said). See "Phase 1c".
+6. ✅ **1c. Push-to-talk as dictation.** On branch `feature/ptt-dictation`, from `feature/voice-handsfree`. The transcript goes into the message box instead of being sent, more recordings add to it, and recording stops after 3 s of silence (15 s if nothing is said). See "Phase 1c".
+   - Tested in headless Chrome with a fake mic: 22 checks pass (speech clips from Aura-2). Auto-stop came 3.0–3.7 s after the speech ended, including over added noise. A 2 s mid-sentence pause didn't stop it. Nothing said, or only clicks: stopped at 15.4 s with no `/api/stt` call. A 70 s dictation was transcribed 5.6 s after stopping. Hold Space ignored a 5 s pause. Esc, Enter, an STT error and hands-free all behaved as planned.
+   - Transcription after stopping takes about 1.2 s warm and about 2.7 s on the first call. Sent straight to `/api/stt`, a 5-minute clip took 7.5–9.2 s, so `TIMEOUT_S` stays at 15 s. Only recordings over about 8 minutes would get close.
+   - Changes from the plan: "Transcribing…" shows as a spinner on the mic button and in the hint row and placeholder, not as an overlay on the box.
+   - Not tested yet: a real mic (`SPEECH_LEVEL` tuning), a background tab, Firefox and Safari.
 7. **2a-2. Streamed answers (optional).** `astream_answer` and the sentence chunker, only if the timing logs show the whole-answer wait is too slow. Target: about 1.2 s or less.
 8. **2c. Tuning.** `eot_threshold`, eager end-of-turn, voice choice, silence auto-stop.
 9. **Before merging.** Integration tests against real Deepgram, the manual checklist, and Firefox and Safari.

@@ -57,7 +57,7 @@ Milvus Lite allows only one process to open the database. While the backend is r
 
 With `DEEPGRAM_API_KEY` set, the chat gets voice in both directions (Deepgram Nova-3 for speech-to-text, Aura-2 for text-to-speech):
 
-- **Ask by voice:** click the mic next to Send, speak, then click send (or press Enter). Esc cancels. Or **hold Space** to talk and release it to send (when the message box is empty or not focused). Recordings stop automatically after 60 s.
+- **Dictate a question:** click the mic next to Send and speak. Recording stops when you pause for 3 s, click stop or press Enter (Esc cancels), and the transcript is added to the end of the message box. Nothing is sent until you press Enter, so you can edit it, type more or dictate again. Or **hold Space** to talk and release it to stop (when the message box is empty or not focused); holding Space never stops at a pause. There's no time limit; if nothing is said for 15 s the mic turns off.
 - **Spoken replies:** answers are read aloud while "Speak replies" is on (sidebar). Every answer also has a Listen button.
 - **Hands-free conversation:** click the waveform button next to the mic and just talk. The bot answers when you finish speaking (Deepgram Flux detects the end of your turn) and you can interrupt it by speaking over it. "Stop" or "Wait" alone also stops it. Stop or Esc ends hands-free; it also stops by itself after 2 minutes of silence.
 

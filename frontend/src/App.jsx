@@ -43,7 +43,6 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [backend, setBackend] = useState("checking");
   const [voiceAvailable, setVoiceAvailable] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState("");
   const [ingest, setIngest] = useState({ status: "idle" });
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -164,37 +163,32 @@ export default function App() {
     [messages, speakReplies, playSpeech, stopSpeech]
   );
 
-  const askByVoice = useCallback(
-    async (blob) => {
-      setTranscribing(true);
-      let transcript;
-      try {
-        ({ transcript } = await transcribe(blob));
-      } catch (e) {
-        setVoiceNotice(`Couldn't transcribe: ${e.message}`);
-        return;
-      } finally {
-        setTranscribing(false);
-      }
-      if (!transcript) {
-        setVoiceNotice("Sorry, I didn't catch that. Try again, a little closer to the mic.");
-        return;
-      }
-      ask(transcript, { viaVoice: true });
-    },
-    [ask]
-  );
+  // Dictation: the transcript goes into the message box, the user sends it.
+  // Returns null (after showing why) when there's nothing to add.
+  const transcribeClip = useCallback(async (blob) => {
+    let transcript;
+    try {
+      ({ transcript } = await transcribe(blob));
+    } catch (e) {
+      setVoiceNotice(`Couldn't transcribe: ${e.message}`);
+      return null;
+    }
+    if (!transcript) {
+      setVoiceNotice("Sorry, I didn't catch that. Try again, a little closer to the mic.");
+      return null;
+    }
+    return transcript;
+  }, []);
 
   const voice = {
     available: voiceAvailable && backend === "ok",
-    transcribing,
     notice: voiceNotice,
     onStart: () => {
       stopSpeech(); // don't record the bot's own voice
       setVoiceNotice("");
       warmUpVoice(); // the Deepgram connection is ready when the recording is sent
     },
-    onRecorded: askByVoice,
+    transcribe: transcribeClip,
     onError: setVoiceNotice,
   };
 
@@ -249,7 +243,7 @@ export default function App() {
 
         <div className="messages">
           <div className="messages-inner">
-            {messages.length === 0 && !transcribing ? (
+            {messages.length === 0 ? (
               <EmptyState onPick={ask} disabled={pending} />
             ) : (
               messages.map((m) => (
@@ -263,7 +257,6 @@ export default function App() {
                 />
               ))
             )}
-            {transcribing && <ChatMessage message={{ role: "user", typing: true }} />}
             {(pending || handsFreeThinking) && <ChatMessage message={{ role: "assistant", typing: true }} />}
             <div ref={bottomRef} />
           </div>

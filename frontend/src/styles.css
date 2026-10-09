@@ -665,18 +665,42 @@ code {
   background: var(--accent-soft);
 }
 
+/* Dictation: the message box stays, read-only, while recording and transcribing */
+
+.composer.is-recording,
+.composer.is-recording:focus-within {
+  border-color: var(--bad);
+}
+
+.composer textarea:read-only {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.mic-btn .spinner {
+  color: var(--accent);
+}
+
+.mic-btn.mic-stop {
+  --level: 0;
+  color: var(--bad);
+  background: var(--bad-soft);
+  /* The halo grows with the input volume, so users can see the mic is working */
+  box-shadow: 0 0 0 calc(var(--level) * 8px) var(--bad-soft);
+  transition: box-shadow 0.08s linear;
+}
+
+.mic-btn.mic-stop:hover {
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+
+/* Hands-free status bar (replaces the message box) */
+
 .composer.recorder {
   align-items: center;
   min-height: 54px;
   border-color: var(--accent);
-}
-
-.composer.recorder.is-recording {
-  border-color: var(--bad);
-}
-
-.recorder .spinner {
-  color: var(--accent);
 }
 
 .rec-dot {
@@ -698,6 +722,8 @@ code {
 }
 
 .rec-time {
+  flex: none;
+  line-height: 36px;
   font-size: 13px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;

@@ -10,7 +10,7 @@ function spaceCanStart(target, composer) {
 }
 
 /**
- * Hold Space to talk: hold to record, release to send.
+ * Hold Space to talk: hold to record, release to stop (the transcript goes into the message box).
  * `recorder` comes from useRecorder; `start()` begins a recording.
  * Returns true while a recording started by holding Space is in progress.
  *
@@ -31,7 +31,7 @@ export default function useHoldToTalk({ recorder, canStart, start, composerRef }
       if (h.state === "release") recorder.stop();
       if (h.state === "abort") recorder.cancel();
     } else if (recorder.status === "idle" && !["off", "waiting"].includes(h.state)) {
-      // Ended by release, Esc, the 60 s limit or a mic error. If Space is still
+      // Ended by release, Esc, Enter or a mic error. If Space is still
       // down, ignore it until it's let go so it doesn't type spaces.
       h.state = h.state === "holding" ? "swallow" : "off";
       setHolding(false);
