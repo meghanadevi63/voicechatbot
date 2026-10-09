@@ -157,6 +157,74 @@ deepgram_keyterms: str = ""          # optional, comma-separated domain terms fo
 
 ---
 
+## Phase 1c: push-to-talk as dictation
+
+Push-to-talk currently sends the transcript as soon as it arrives, so the user can't check or fix it. Change it to dictation: the transcript goes into the message box, more recordings add to it, and the user sends it when ready. Hands-free mode does not change.
+
+### User experience
+
+1. The user clicks the mic (or holds Space). The message box stays visible but read-only. The mic button turns into a red stop button that pulses with the input level. The hint row shows the elapsed time, plus "Esc to cancel".
+2. Recording ends only when the user clicks stop, presses Enter, releases Space, or **stays silent for 3 s after speaking**. If nothing is said at all, it stops after **15 s** with "Didn't hear anything". There is **no time limit** on speaking: the 60 s cap is removed.
+3. "Transcribing…" shows in the box for about 1 s. Then the transcript is **added to the end** of whatever is in the box, typed or spoken, and the cursor moves to the end.
+4. The user can edit the text, record again (it adds to the end), or send it with Enter or Send. **Nothing is sent automatically.**
+5. Nothing heard, or an empty transcript: show "Sorry, I didn't catch that" and leave the box as it was. If transcription fails, show the error and leave the box as it was.
+
+### Decisions
+
+| Topic | Decision | Why |
+|-------|----------|-----|
+| When recording ends | Click, Enter or Space release, **plus auto-stop after 3 s of silence** once speech has been heard | Matches "pause or stop". 3 s leaves room to think mid-sentence, where 2 s could cut the user off |
+| No speech at all | Stop after **15 s** with "Didn't hear anything". Discard the clip without sending it to `/api/stt` | Catches a mic that was left on by mistake, without limiting how long someone can speak |
+| Recording length | No limit. Remove `MAX_SECONDS` | The user decides when to stop. The only real bound is the `/api/stt` upload limit (`MAX_AUDIO_BYTES`, 10 MB), which is about 40 min of WebM/Opus or about 10 min of Safari's MP4/AAC. A clip over the limit gets the existing 413 "Recording is too long" error, and the box stays as it was |
+| Where new text goes | Always at the end of the box | Simple and predictable. Inserting at the cursor could come later |
+| Joining text | Add a single space, or nothing if the box ends with whitespace. Keep Nova-3's capitalisation | Lowercasing the first letter would break names such as "Atomic Habits" |
+| Box during recording and transcription | Read-only | The transcript can't clash with text typed at the same time |
+| Hold Space | Release also fills the box. It still starts only when focus is outside fields, or in an empty box | Space has to type normally in a box that has text |
+| Spoken replies | Follow the "Speak replies" toggle, as typed questions do | Same as today |
+| `viaVoice` mark on the message | Set if any part of the sent text was dictated | Keeps the existing mic icon on voice questions |
+| Backend | No changes. `/api/stt` (Nova-3) and `/api/voice/warmup` stay as they are | |
+
+### Changes
+
+- **`voice/useRecorder.js`:** silence auto-stop, inside the existing level meter loop.
+  - Mark `heardSpeech` once the level goes above `SPEECH_LEVEL`. After that, stop with `finish(true)` when the level has stayed below it for `SILENCE_MS = 3000`.
+  - If `heardSpeech` is still false after `NO_SPEECH_MS = 15000`, stop with `finish(false)` and report "Didn't hear anything. Click the mic and try again." through `onError`.
+  - `SPEECH_LEVEL` is tuned on a real mic; start at about 0.1.
+  - Without a meter (the `AudioContext` failed), there's no auto-stop and manual stop still works.
+  - Remove `MAX_SECONDS` and the auto-stop at the limit. The timer only shows the elapsed time, and Composer no longer shows "/ 1:00".
+  - Keep `MIN_SECONDS`. Add the `autoStopped` flag to the `onRecorded` callback, so the hint can say "Stopped after a pause".
+- **`voice/dictation.js` (new):** a pure helper, `appendTranscript(existing, addition)`, that does the joining described above.
+- **`App.jsx`:**
+  - Replace `askByVoice` with `transcribeClip(blob) → Promise<string | null>`. It sets the notices ("didn't catch that", errors) and returns the text without calling `ask()`.
+  - Remove the "transcribing" bubble from the chat, because the progress now shows in the composer.
+  - Pass `viaVoice` through `onSend`.
+- **`Composer.jsx`:**
+  - Remove the separate recording and transcribing bar. The form and text box always stay on screen.
+  - While recording: the box is read-only, the mic button is a stop button, Send is disabled, Enter stops recording, Esc cancels.
+  - When the transcript arrives: `setText(appendTranscript(...))`, set a `dictated` flag, focus the box and put the cursor at the end.
+  - On send or clear: reset `dictated`.
+  - Update the hints: idle says "Click the mic or hold Space to dictate. It isn't sent until you press Enter."
+- **`voice/useHoldToTalk.js`:** no change in how it works. Releasing Space calls `recorder.stop()`, which now fills the box.
+- **`styles.css`:** styles for the recording mic button (red, pulsing with `--level`), the read-only box, and the "Transcribing…" overlay. Drop the old `.composer.recorder` push-to-talk styles, which hands-free still partly uses, so check before removing any.
+- **`README.md`:** update the usage section.
+
+### Testing
+
+The frontend has no unit test setup, so test as in 1b and 2b: headless Chrome with a fake mic (`--use-file-for-fake-audio-capture`), plus a real mic.
+
+- Dictate into an empty box: the text appears and nothing is sent.
+- Type "Tell me about", then dictate "habit stacking": the result is "Tell me about habit stacking".
+- Dictate twice, edit, then send: one user message with the `viaVoice` mark, and context is kept.
+- Stay silent after speaking: auto-stop after about 3 s. Pause briefly (< 3 s) mid-question: it doesn't stop.
+- A long dictation (over 60 s, with only short pauses) keeps recording and is fully transcribed.
+- Click the mic and stay silent: stops after 15 s with "Didn't hear anything", with no `/api/stt` call and the box unchanged.
+- Only noise, then a manual stop: "didn't catch that", with the box unchanged.
+- Esc while recording: the box is unchanged. Hold and release Space: the box fills and nothing is sent.
+- Transcription error (backend stopped): error notice and the box unchanged.
+- Hands-free still works as before.
+
+---
+
 ## Phase 2: hands-free real-time
 
 The mic button gets a second mode: **hands-free**. The user talks naturally, the bot detects the end of each turn, starts speaking the first sentence while the LLM is still generating, and stops immediately if the user interrupts. Everything still flows into the same chat message list with sources.
@@ -341,9 +409,10 @@ Phase 2 work happens on the branch `feature/voice-handsfree` (from `feature/deep
    - After an interruption the server history keeps the whole answer, not just the part that was heard (answers aren't streamed yet).
    - Not tested yet: real laptop speakers (echo), Firefox and Safari.
    Original plan: `useVoiceSession`, worklets, barge-in with echo guard, status UI.
-6. **2a-2. Streamed answers (optional).** `astream_answer` and the sentence chunker, only if the timing logs show the whole-answer wait is too slow. Target: about 1.2 s or less.
-7. **2c. Tuning.** `eot_threshold`, eager end-of-turn, voice choice, silence auto-stop.
-8. **Before merging.** Integration tests against real Deepgram, the manual checklist, and Firefox and Safari.
+6. **1c. Push-to-talk as dictation.** On branch `feature/ptt-dictation`, from `feature/voice-handsfree`. The transcript goes into the message box instead of being sent, more recordings add to it, and recording stops after 3 s of silence (15 s if nothing is said). See "Phase 1c".
+7. **2a-2. Streamed answers (optional).** `astream_answer` and the sentence chunker, only if the timing logs show the whole-answer wait is too slow. Target: about 1.2 s or less.
+8. **2c. Tuning.** `eot_threshold`, eager end-of-turn, voice choice, silence auto-stop.
+9. **Before merging.** Integration tests against real Deepgram, the manual checklist, and Firefox and Safari.
 
 ## Later (out of scope now)
 
